@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { MEDIA_TYPE_LABELS, PROVIDER_LABELS } from '../../utils/mediaEmbeds.js';
 import { validateMediaLinkInput } from '../../utils/adminValidation.js';
 import { FieldError, ItemRowActions, TOUCH_TARGET_STYLE } from './adminShared.jsx';
 
@@ -132,14 +133,14 @@ export default function MediaLinksAdminPanel({
                 type="url"
                 dir="ltr"
                 className="admin-input"
-                placeholder="https://www.youtube.com/watch?v=..."
+                placeholder="https://www.instagram.com/reel/... أو https://www.youtube.com/watch?v=..."
                 value={formState.url}
                 onChange={(e) => handleFieldChange('url', e.target.value)}
                 disabled={isBusy}
                 required
               />
               <span className="admin-field__hint">
-                المنصات المعتمدة: YouTube وVimeo (فيديو) أو SoundCloud وGoogle Drive (صوت).
+                يدعم روابط الفيديو والريلز والمنشورات (YouTube، Instagram، Facebook، TikTok، X، Threads، LinkedIn، Telegram، Vimeo، Dailymotion)، الصور الخارجية الآمنة (HTTPS / Google Photos / Canva)، والصوتيات (SoundCloud، Spotify، Google Drive).
               </span>
               <FieldError message={fieldErrors.url} />
             </div>
@@ -172,6 +173,9 @@ export default function MediaLinksAdminPanel({
               >
                 <option value="">تحديد تلقائي حسب الرابط</option>
                 <option value="video">فيديو</option>
+                <option value="reel">رييل / فيديو قصير</option>
+                <option value="post">منشور تواصل اجتماعي</option>
+                <option value="image">صورة خارجية</option>
                 <option value="audio">صوت</option>
               </select>
               <FieldError message={fieldErrors.mediaType} />
@@ -261,7 +265,8 @@ export default function MediaLinksAdminPanel({
                   ? postTitleById.get(String(link.postId)) || `إعلان #${link.postId}`
                   : 'رابط مستقل';
               const displayUrl = link.canonicalUrl || link.embedUrl || link.url || '';
-              const typeLabel = link.mediaType === 'audio' ? 'صوت' : 'فيديو';
+              const typeLabel = MEDIA_TYPE_LABELS[link.mediaType] || 'فيديو';
+              const providerLabel = PROVIDER_LABELS[link.provider] || link.provider;
 
               return (
                 <article key={link.id} className="admin-item" role="listitem">
@@ -271,9 +276,9 @@ export default function MediaLinksAdminPanel({
                         {link.title || 'رابط وسائط بدون عنوان'}
                       </strong>
                       <span className="admin-badge">{typeLabel}</span>
-                      {link.provider && (
+                      {providerLabel && (
                         <span className="admin-badge admin-badge--muted">
-                          {link.provider}
+                          {providerLabel}
                         </span>
                       )}
                     </div>

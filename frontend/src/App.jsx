@@ -14,9 +14,21 @@ import './styles.css';
 const PAGE_IDS = PAGES.map((p) => p.id);
 const DEFAULT_PAGE = PAGE_IDS[0];
 
-function resolvePageFromHash() {
-  if (typeof window === 'undefined') return DEFAULT_PAGE;
-  const hash = window.location.hash.replace(/^#\/?/, '');
+export function resolvePageFromHash(rawHash) {
+  const sourceHash =
+    typeof rawHash === 'string'
+      ? rawHash
+      : typeof window !== 'undefined'
+        ? window.location.hash
+        : '';
+  const hash = sourceHash.replace(/^#\/?/, '');
+  if (!hash) return DEFAULT_PAGE;
+  if (hash.startsWith('form-') || hash === 'engagement-section') {
+    return 'engagement';
+  }
+  if (hash.startsWith('post-') || hash === 'announcements-feed') {
+    return 'announcements';
+  }
   return PAGE_IDS.includes(hash) ? hash : DEFAULT_PAGE;
 }
 
@@ -230,7 +242,7 @@ export default function App({
         ) : (
           <>
             {page === 'announcements' && <AnnouncementsFeed posts={livePosts} />}
-            {page === 'engagement' && <EngagementSection forms={liveForms} />}
+            {page === 'engagement' && <EngagementSection forms={liveForms} members={liveMembers} />}
             {page === 'committee' && <CommitteeDirectory members={liveMembers} />}
           </>
         )}

@@ -124,7 +124,7 @@ test('AnnouncementCard supports snake_case fields from Flask API payloads and om
   assert.doesNotMatch(html, /<img/, 'Should not render an <img> tag when image_url is empty/whitespace');
 });
 
-test('AnnouncementsFeed renders posts in reverse-chronological order in the DOM with accessible category filter controls', () => {
+test('AnnouncementsFeed renders posts in reverse-chronological order in the DOM without category filter buttons', () => {
   const html = renderToStaticMarkup(
     <AnnouncementsFeed posts={samplePostsUnordered} />
   );
@@ -132,14 +132,32 @@ test('AnnouncementsFeed renders posts in reverse-chronological order in the DOM 
   assert.match(html, /dir="rtl"/, 'AnnouncementsFeed section must be RTL');
   assert.ok(html.includes('لوحة الإعلانات والفعاليات'), 'Should render Arabic section heading');
 
-  // Verify all category filter buttons exist with >= 44x44px touch targets
-  assert.ok(html.includes('الكل'), 'Should render "الكل" filter button');
-  assert.ok(html.includes('إعلان عام'), 'Should render "إعلان عام" filter button');
-  assert.ok(html.includes('فعالية قادمة'), 'Should render "فعالية قادمة" filter button');
-  assert.ok(html.includes('نشاط طلابي'), 'Should render "نشاط طلابي" filter button');
-  assert.ok(html.includes('مستجدات'), 'Should render "مستجدات" filter button');
-  assert.match(html, /min-height:\s*44px/, 'Category filter buttons must enforce min-height: 44px');
-  assert.match(html, /min-width:\s*44px/, 'Category filter buttons must enforce min-width: 44px');
+  // Verify category filter buttons/toolbar are completely removed
+  assert.doesNotMatch(
+    html,
+    /role="toolbar"/,
+    'AnnouncementsFeed must NOT render a category filter toolbar'
+  );
+  assert.doesNotMatch(
+    html,
+    /announcements-feed__filter-btn/,
+    'AnnouncementsFeed must NOT render category filter buttons'
+  );
+  assert.doesNotMatch(
+    html,
+    /data-category=/,
+    'AnnouncementsFeed must NOT render data-category filter buttons'
+  );
+  assert.ok(
+    !html.includes('>الكل<'),
+    'AnnouncementsFeed must NOT render "الكل" filter button'
+  );
+
+  // Verify post cards still display their category badges
+  assert.ok(html.includes('إعلان عام'), 'Post card should display "إعلان عام" badge');
+  assert.ok(html.includes('فعالية قادمة'), 'Post card should display "فعالية قادمة" badge');
+  assert.ok(html.includes('نشاط طلابي'), 'Post card should display "نشاط طلابي" badge');
+  assert.ok(html.includes('مستجدات'), 'Post card should display "مستجدات" badge');
 
   // Verify reverse-chronological order in rendered HTML
   const idxNewest = html.indexOf('يوم التراث والهوية في مدرسة المحجر'); // Nov 24
@@ -154,46 +172,14 @@ test('AnnouncementsFeed renders posts in reverse-chronological order in the DOM 
   );
 });
 
-test('AnnouncementsFeed filters rendered posts when initialCategory / activeCategory is specified', () => {
-  const html = renderToStaticMarkup(
-    <AnnouncementsFeed
-      posts={samplePostsUnordered}
-      initialCategory="student_activity"
-    />
-  );
-
-  assert.ok(
-    html.includes('مبادرة أصدقاء المكتبة والقراءة الحرة'),
-    'Should render matching student_activity post'
-  );
-  assert.ok(
-    !html.includes('تعميم بخصوص مواعيد الدوام الشتوي'),
-    'Should not render general post when filtered by student_activity'
-  );
-  assert.ok(
-    !html.includes('يوم التراث والهوية في مدرسة المحجر'),
-    'Should not render upcoming_event post when filtered by student_activity'
-  );
-  assert.match(
-    html,
-    /aria-pressed="true"[^>]*>[^<]*نشاط طلابي/,
-    'Active category filter button should have aria-pressed="true"'
-  );
-});
-
-test('AnnouncementsFeed displays an Arabic empty state when no posts match the selected category', () => {
-  const onlyGeneralPosts = [samplePostsUnordered[0]];
-  const html = renderToStaticMarkup(
-    <AnnouncementsFeed
-      posts={onlyGeneralPosts}
-      initialCategory="upcoming_event"
-    />
-  );
+test('AnnouncementsFeed displays an Arabic empty state when there are no posts', () => {
+  const html = renderToStaticMarkup(<AnnouncementsFeed posts={[]} />);
 
   assert.match(html, /dir="rtl"/, 'Empty state must remain RTL');
+  assert.match(html, /role="status"/, 'Empty state should expose role="status"');
   assert.ok(
-    html.includes('لا توجد إعلانات أو فعاليات في هذا التصنيف حالياً'),
-    'Should display Arabic empty state message when filtered list is empty'
+    html.includes('لا توجد إعلانات أو فعاليات'),
+    'Should display Arabic empty state message when posts list is empty'
   );
 });
 
@@ -205,18 +191,52 @@ test('App renders both the AnnouncementsFeed and CommitteeDirectory in a respons
   assert.ok(html.includes('أعضاء لجنة أولياء الأمور'), 'App should render CommitteeDirectory section');
 });
 
-test('styles.css defines mobile-first grid and desktop responsive breakpoints for announcements-feed', () => {
+test('styles.css defines centered single-column Facebook-style vertical feed and uncropped natural image sizing', () => {
   const cssPath = path.resolve(process.cwd(), 'src/styles.css');
   const cssContent = fs.readFileSync(cssPath, 'utf-8');
 
   assert.match(
     cssContent,
-    /\.announcements-feed__grid\s*\{[^}]*grid-template-columns:\s*1fr/,
-    'Mobile-first default grid for announcements feed must be 1 column'
+    /\.announcements-feed__grid\s*\{[^}]*grid-template-columns:\s*1fr[^}]*max-width:\s*680px[^}]*margin:\s*0 auto/s,
+    'Announcements feed must be a centered single-column vertical feed'
+  );
+  assert.doesNotMatch(
+    cssContent,
+    /@media\s*\(min-width:\s*(?:640|1024)px\)[\s\S]*?\.announcements-feed__grid\s*\{[^}]*repeat\(2/s,
+    'Desktop breakpoints must keep single-column centered feed layout'
   );
   assert.match(
     cssContent,
-    /@media\s*\(min-width:\s*640px\)[\s\S]*?\.announcements-feed__grid\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*1fr\)/,
-    'Tablet/desktop breakpoint must expand announcements feed grid to multi-column layout'
+    /\.announcement-card__image\s*\{[^}]*height:\s*auto[^}]*object-fit:\s*contain/s,
+    'Feed images must preserve natural aspect ratio without cropping'
+  );
+});
+
+test('AnnouncementsFeed displays all posts stacked one above another with full details inline and no show/hide details buttons', () => {
+  const postsWithDetails = samplePostsUnordered.map((p, idx) =>
+    idx === 1
+      ? { ...p, content: 'تفاصيل كاملة ليوم التراث مع البرنامج الزمني.' }
+      : p
+  );
+  const html = renderToStaticMarkup(<AnnouncementsFeed posts={postsWithDetails} />);
+
+  assert.ok(html.includes('يوم التراث والهوية في مدرسة المحجر'));
+  assert.ok(html.includes('تفاصيل كاملة ليوم التراث مع البرنامج الزمني.'));
+  assert.ok(html.includes('مستجدات مشروع تظليل ساحة المدرسة (العريشة)'));
+  assert.ok(html.includes('مبادرة أصدقاء المكتبة والقراءة الحرة'));
+  assert.ok(html.includes('تعميم بخصوص مواعيد الدوام الشتوي'));
+  assert.ok(!html.includes('عرض التفاصيل'), 'Show details button must be removed');
+  assert.ok(!html.includes('إخفاء التفاصيل'), 'Hide details button must be removed');
+});
+
+test('sortAndFilterPosts honors explicit displayOrder ascending while preserving date order when omitted', () => {
+  const customOrdered = [
+    { ...samplePostsUnordered[0], displayOrder: 1 },
+    { ...samplePostsUnordered[1], displayOrder: 2 },
+    { ...samplePostsUnordered[2], displayOrder: 3 },
+  ];
+  assert.deepEqual(
+    sortAndFilterPosts(customOrdered, 'all').map((p) => p.id),
+    [101, 102, 103]
   );
 });

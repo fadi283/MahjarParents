@@ -531,6 +531,43 @@ class TestStrictCorsRules:
             )
             assert resp.status_code == 200
 
+    def test_dev_lan_origin_allowlist_permits_private_ip_dev_ports_only(
+        self, tmp_path, admin_credentials
+    ):
+        assert platform_security.is_private_lan_dev_origin("http://10.0.0.5:3000") is True
+        assert platform_security.is_private_lan_dev_origin("http://192.168.1.25:5173") is True
+        assert platform_security.is_private_lan_dev_origin("http://8.8.8.8:3000") is False
+        assert platform_security.is_private_lan_dev_origin("http://10.0.0.5:8080") is False
+        assert platform_security.is_private_lan_dev_origin("https://evil.example.com") is False
+
+        lan_dev_app = backend_app.create_app({
+            "TESTING": True,
+            "SECRET_KEY": "k" * 40,
+            "ADMIN_USERNAME": admin_credentials["username"],
+            "ADMIN_PASSWORD_HASH": generate_password_hash(admin_credentials["password"]),
+            "CORS_ALLOWED_ORIGINS": platform_security.DEFAULT_DEV_CORS_ORIGINS,
+            "CORS_ALLOW_DEV_LAN_ORIGINS": True,
+            "CMS_DATA_FILE": str(tmp_path / "lan_dev.json"),
+        })
+        with lan_dev_app.test_client() as c:
+            ok_resp = c.post(
+                "/api/admin/auth/login",
+                base_url="http://127.0.0.1:5000",
+                headers={"Origin": "http://10.0.0.5:3000"},
+                json=admin_credentials,
+            )
+            assert ok_resp.status_code == 200
+            assert ok_resp.headers.get("Access-Control-Allow-Origin") == "http://10.0.0.5:3000"
+
+            denied_resp = c.post(
+                "/api/admin/auth/login",
+                base_url="http://127.0.0.1:5000",
+                headers={"Origin": "http://8.8.8.8:3000"},
+                json=admin_credentials,
+            )
+            assert denied_resp.status_code == 403
+            assert denied_resp.get_json()["code"] == "CORS_ORIGIN_DENIED"
+
 
 @pytest.mark.api
 class TestRateLimitingOnAuthAndWriteRoutes:

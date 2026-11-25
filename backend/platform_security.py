@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import ipaddress
 import re
 import threading
 import time
@@ -21,6 +22,7 @@ DEFAULT_DEV_CORS_ORIGINS = (
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 )
+DEFAULT_DEV_CORS_PORTS = frozenset({3000, 5173})
 DEFAULT_CORS_ALLOWED_METHODS = ("GET", "POST", "PUT", "DELETE", "OPTIONS")
 DEFAULT_CORS_ALLOWED_HEADERS = (
     "Authorization",
@@ -46,7 +48,11 @@ FRONTEND_HTML_CSP = (
     "font-src 'self' https://fonts.gstatic.com data:; "
     "connect-src 'self' https:; "
     "frame-src 'self' https://docs.google.com https://www.youtube-nocookie.com "
-    "https://player.vimeo.com https://w.soundcloud.com https://drive.google.com; "
+    "https://player.vimeo.com https://w.soundcloud.com https://drive.google.com "
+    "https://www.instagram.com https://www.facebook.com https://www.tiktok.com "
+    "https://open.spotify.com https://www.dailymotion.com "
+    "https://www.linkedin.com https://t.me https://www.canva.com "
+    "https://www.threads.net https://www.threads.com; "
     "object-src 'none'; "
     "base-uri 'self'; "
     "form-action 'self'; "
@@ -176,6 +182,24 @@ def normalize_origin(raw_origin: Any) -> str:
     return f"{scheme}://{host}"
 
 
+def is_private_lan_dev_origin(normalized_origin: str) -> bool:
+    """Return True if normalized_origin is http://<private-or-loopback-ip>:<dev-port>."""
+    if not normalized_origin or not normalized_origin.startswith("http://"):
+        return False
+    parsed = urlsplit(normalized_origin)
+    if parsed.port not in DEFAULT_DEV_CORS_PORTS or not parsed.hostname:
+        return False
+    try:
+        ip_obj = ipaddress.ip_address(parsed.hostname)
+    except ValueError:
+        return False
+    return (
+        (ip_obj.is_private or ip_obj.is_loopback)
+        and not ip_obj.is_unspecified
+        and not ip_obj.is_multicast
+    )
+
+
 def parse_cors_origins(
     raw_origins: Any, *, allow_http: bool = True
 ) -> tuple[str, ...]:
@@ -229,6 +253,11 @@ def validate_production_security_config(config: dict[str, Any]) -> None:
 
     if not is_production:
         return
+
+    if bool(config.get("CORS_ALLOW_DEV_LAN_ORIGINS")):
+        raise SecurityConfigError(
+            "CORS_ALLOW_DEV_LAN_ORIGINS cannot be enabled in production."
+        )
 
     secret_key = str(config.get("SECRET_KEY") or "")
     secret_lower = secret_key.strip().lower()
@@ -527,6 +556,7 @@ def configure_platform_security(
     flask_app.extensions["rate_limiter"] = limiter
 
     allowed_origins_set = frozenset(flask_app.config.get("CORS_ALLOWED_ORIGINS") or ())
+    allow_dev_lan_origins = bool(flask_app.config.get("CORS_ALLOW_DEV_LAN_ORIGINS"))
     allowed_methods = tuple(
         flask_app.config.get("CORS_ALLOWED_METHODS") or DEFAULT_CORS_ALLOWED_METHODS
     )
@@ -589,7 +619,13 @@ def configure_platform_security(
         # 2. Strict CORS & preflight handling
         raw_origin = request.headers.get("Origin")
         normalized_origin = normalize_origin(raw_origin) if raw_origin is not None else ""
-        is_allowlisted = bool(normalized_origin and normalized_origin in allowed_origins_set)
+        is_allowlisted = bool(
+            normalized_origin
+            and (
+                normalized_origin in allowed_origins_set
+                or (allow_dev_lan_origins and is_private_lan_dev_origin(normalized_origin))
+            )
+        )
         if is_allowlisted:
             g.cors_allowed_origin = normalized_origin
 

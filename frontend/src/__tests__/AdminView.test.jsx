@@ -23,7 +23,9 @@ import {
   translateAdminError,
 } from '../utils/adminApi.js';
 import {
+  movePostInList,
   removeById,
+  reorderPostsByDrag,
   syncMediaLinksIntoPosts,
   upsertCommitteeList,
   upsertFormList,
@@ -172,6 +174,7 @@ test('validateCommitteeInput sanitizes XSS, validates required/optional fields, 
     phone: '052-1112233',
     avatarUrl: '/api/media/images/0123456789abcdef.webp',
     displayOrder: 3,
+    isDirectContact: false,
   });
 
   const emptyOrderResult = validateCommitteeInput({
@@ -219,6 +222,26 @@ test('validatePostInput validates categories, calendar event dates, safe image U
   assert.equal(valid.payload.category, 'upcoming_event');
   assert.equal(valid.payload.eventDate, '2026-12-10');
   assert.equal(valid.payload.imageUrl, 'https://cdn.example.com/flyer.webp');
+  assert.deepEqual(valid.payload.mediaLinks, []);
+
+  const withMedia = validatePostInput({
+    title: 'فعالية يوم التراث',
+    summary: 'تفاصيل الفعالية',
+    category: 'upcoming_event',
+    mediaLinks: [
+      '  https://www.facebook.com/reel/1391452396433188  ',
+      '',
+      'https://youtu.be/dQw4w9WgXcQ',
+      'https://youtu.be/dQw4w9WgXcQ',
+      'https://cdn.example.org/photos/day.webp',
+    ],
+  });
+  assert.equal(withMedia.valid, true);
+  assert.deepEqual(withMedia.payload.mediaLinks, [
+    'https://www.facebook.com/reel/1391452396433188',
+    'https://youtu.be/dQw4w9WgXcQ',
+    'https://cdn.example.org/photos/day.webp',
+  ]);
 
   const invalidCases = [
     { title: '', summary: 'ملخص', category: 'general' },
@@ -229,6 +252,8 @@ test('validatePostInput validates categories, calendar event dates, safe image U
     { title: 'عنوان', summary: 'ملخص', category: 'general', imageUrl: 'http://insecure.com/a.webp' },
     { title: 'عنوان', summary: 'ملخص', category: 'general', imageUrl: 'javascript:alert(1)' },
     { title: 'عنوان', summary: 'ملخص', category: 'general', imageUrl: 'https://example.com/a.svg' },
+    { title: 'عنوان', summary: 'ملخص', category: 'general', mediaLinks: ['https://evil.example.com/video.mp4'] },
+    { title: 'عنوان', summary: 'ملخص', category: 'general', mediaLinks: ['http://www.youtube.com/watch?v=dQw4w9WgXcQ'] },
   ];
 
   for (const input of invalidCases) {
@@ -258,6 +283,33 @@ test('validateMediaLinkInput accepts allowlisted media URLs, handles optional me
   assert.equal(standaloneDrive.valid, true);
   assert.equal(standaloneDrive.payload.mediaType, 'audio');
   assert.equal(standaloneDrive.payload.postId, null);
+
+  const instaReel = validateMediaLinkInput({
+    url: 'https://www.instagram.com/reel/C5AbCdEfGhI/',
+    mediaType: 'reel',
+    postId: '1',
+  });
+  assert.equal(instaReel.valid, true);
+  assert.equal(instaReel.resolved.mediaType, 'reel');
+  assert.equal(instaReel.resolved.provider, 'instagram');
+
+  const xPost = validateMediaLinkInput({
+    url: 'https://x.com/mahjar_school/status/1800123456789012345',
+    mediaType: 'post',
+    postId: '1',
+  });
+  assert.equal(xPost.valid, true);
+  assert.equal(xPost.resolved.mediaType, 'post');
+  assert.equal(xPost.resolved.renderMode, 'card');
+
+  const extImage = validateMediaLinkInput({
+    url: 'https://cdn.example.org/gallery/heritage.webp',
+    mediaType: 'image',
+    postId: '1',
+  });
+  assert.equal(extImage.valid, true);
+  assert.equal(extImage.resolved.mediaType, 'image');
+  assert.equal(extImage.resolved.renderMode, 'image');
 
   const rejected = [
     { url: 'https://evil.example.com/video.mp4' },
@@ -484,6 +536,55 @@ test('adminState helpers upsert, remove, order, and sync media links into posts'
   assert.deepEqual(forms.map((f) => f.id), [2, 1]);
 
   assert.deepEqual(removeById(forms, 2).map((f) => f.id), [1]);
+
+  const customOrderedPosts = upsertPostList(
+    [
+      { id: 1, title: 'أول', displayOrder: 2, publishedAt: '2026-11-24T08:00:00Z' },
+      { id: 2, title: 'ثاني', displayOrder: 1, publishedAt: '2026-11-01T08:00:00Z' },
+    ],
+    { id: 3, title: 'ثالث', displayOrder: 3, publishedAt: '2026-11-25T08:00:00Z' }
+  );
+  assert.deepEqual(customOrderedPosts.map((p) => p.id), [2, 1, 3]);
+
+  const movedUp = movePostInList(customOrderedPosts, 1, 'up');
+  assert.equal(movedUp.moved, true);
+  assert.deepEqual(movedUp.orderedIds, [1, 2, 3]);
+  assert.deepEqual(movedUp.nextPosts.map((p) => p.displayOrder), [1, 2, 3]);
+
+  const movedTopUp = movePostInList(customOrderedPosts, 2, 'up');
+  assert.equal(movedTopUp.moved, false);
+
+  const movedDown = movePostInList(customOrderedPosts, 2, 'down');
+  assert.equal(movedDown.moved, true);
+  assert.deepEqual(movedDown.orderedIds, [1, 2, 3]);
+
+  const draggedToTop = reorderPostsByDrag(customOrderedPosts, 3, 2);
+  assert.equal(draggedToTop.moved, true);
+  assert.deepEqual(draggedToTop.orderedIds, [3, 2, 1]);
+  assert.deepEqual(draggedToTop.nextPosts.map((p) => p.displayOrder), [1, 2, 3]);
+
+  const draggedToBottom = reorderPostsByDrag(customOrderedPosts, 2, 3);
+  assert.equal(draggedToBottom.moved, true);
+  assert.deepEqual(draggedToBottom.orderedIds, [1, 3, 2]);
+
+  assert.equal(reorderPostsByDrag(customOrderedPosts, 2, 2).moved, false);
+  assert.equal(reorderPostsByDrag(customOrderedPosts, 999, 2).moved, false);
+});
+
+test('createAdminApiClient reorderPosts sends PUT /api/admin/posts/reorder with postIds', async () => {
+  const calls = [];
+  const storage = createMemoryStorage({ [ADMIN_TOKEN_STORAGE_KEY]: 'tok-reorder' });
+  const mockFetch = async (url, options = {}) => {
+    calls.push({ url, options });
+    return makeMockResponse(200, []);
+  };
+  const api = createAdminApiClient({ fetchImpl: mockFetch, storage });
+  await api.reorderPosts([3, 1, 2]);
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].url, '/api/admin/posts/reorder');
+  assert.equal(calls[0].options.method, 'PUT');
+  assert.equal(calls[0].options.body, JSON.stringify({ postIds: [3, 1, 2] }));
 });
 
 // --- 4. React SSR & Protected Admin UI Tests ---
@@ -520,18 +621,33 @@ test('Unauthenticated AdminDashboard strictly hides all CRUD tabs, forms, and ma
   assert.ok(!html.includes('تأكيد الحذف'));
 });
 
-test('Authenticated AdminDashboard renders header, logout, 4 accessible tabs, and active section content', () => {
-  assert.equal(ADMIN_SECTIONS.length, 4);
+test('Authenticated AdminDashboard renders header, logout, 3 accessible tabs without separate media tab, and active section content', () => {
+  assert.equal(ADMIN_SECTIONS.length, 3);
+  assert.deepEqual(
+    ADMIN_SECTIONS.map((section) => section.id),
+    ['committee', 'posts', 'forms']
+  );
 
   const initialData = {
     committee: [
       { id: 1, fullName: 'فادي وليد اغبارية', role: 'رئيس لجنة أولياء أمور الطلاب', email: 'Egb.fadi@gmail.com' },
     ],
     posts: [
-      { id: 1, title: 'يوم التراث والهوية', summary: 'ملخص', category: 'upcoming_event', mediaLinks: [] },
-    ],
-    mediaLinks: [
-      { id: 1, postId: 1, title: 'فيديو اليوم', mediaType: 'video', provider: 'youtube', canonicalUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' },
+      {
+        id: 1,
+        title: 'يوم التراث والهوية',
+        summary: 'ملخص',
+        category: 'upcoming_event',
+        mediaLinks: [
+          {
+            id: 1,
+            postId: 1,
+            mediaType: 'video',
+            provider: 'youtube',
+            canonicalUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+          },
+        ],
+      },
     ],
     forms: [
       {
@@ -563,7 +679,7 @@ test('Authenticated AdminDashboard renders header, logout, 4 accessible tabs, an
   assert.match(baseHtml, /role="tablist"/);
   assert.ok(baseHtml.includes('أعضاء اللجنة'));
   assert.ok(baseHtml.includes('الإعلانات والفعاليات'));
-  assert.ok(baseHtml.includes('روابط الوسائط'));
+  assert.ok(!baseHtml.includes('روابط الوسائط'));
   assert.ok(baseHtml.includes('نماذج Google Forms'));
   assert.ok(baseHtml.includes('فادي وليد اغبارية'));
   assert.match(baseHtml, /min-height:\s*44px/);
@@ -578,16 +694,11 @@ test('Authenticated AdminDashboard renders header, logout, 4 accessible tabs, an
   );
   assert.ok(postsHtml.includes('يوم التراث والهوية'));
   assert.ok(postsHtml.includes('إضافة إعلان أو فعالية جديدة'));
-
-  const mediaHtml = renderToStaticMarkup(
-    <AdminDashboard
-      initialAuth={{ authenticated: true, username: 'admin' }}
-      initialData={initialData}
-      initialSection="media"
-    />
-  );
-  assert.ok(mediaHtml.includes('فيديو اليوم'));
-  assert.ok(mediaHtml.includes('إضافة رابط وسائط خارجي'));
+  assert.ok(postsHtml.includes('روابط الوسائط الخارجية (اختياري)'));
+  assert.ok(postsHtml.includes('id="post-media-link-0"'));
+  assert.ok(postsHtml.includes('+ إضافة رابط وسائط آخر'));
+  assert.ok(!postsHtml.includes('id="media-type"'));
+  assert.ok(!postsHtml.includes('id="media-title"'));
 
   const formsHtml = renderToStaticMarkup(
     <AdminDashboard
@@ -613,12 +724,44 @@ test('Admin CRUD panels support edit mode with save/cancel actions and accessibl
 
   const postEditHtml = renderToStaticMarkup(
     <PostsAdminPanel
-      posts={[{ id: 2, title: 'عنوان قديم', summary: 'ملخص', category: 'general' }]}
-      initialEditingItem={{ id: 2, title: 'عنوان قديم', summary: 'ملخص', category: 'general' }}
+      posts={[
+        {
+          id: 2,
+          title: 'عنوان قديم',
+          summary: 'ملخص',
+          category: 'general',
+          mediaLinks: [{ canonicalUrl: 'https://www.facebook.com/reel/1391452396433188' }],
+        },
+        {
+          id: 3,
+          title: 'إعلان ثاني',
+          summary: 'ملخص ثاني',
+          category: 'updates',
+        },
+      ]}
+      initialEditingItem={{
+        id: 2,
+        title: 'عنوان قديم',
+        summary: 'ملخص',
+        category: 'general',
+        mediaLinks: [{ canonicalUrl: 'https://www.facebook.com/reel/1391452396433188' }],
+      }}
     />
   );
   assert.ok(postEditHtml.includes('حفظ التعديلات'));
   assert.ok(postEditHtml.includes('value="عنوان قديم"'));
+  assert.ok(postEditHtml.includes('value="https://www.facebook.com/reel/1391452396433188"'));
+  assert.ok(postEditHtml.includes('draggable="true"'));
+  assert.ok(postEditHtml.includes('data-post-id="2"'));
+  assert.ok(postEditHtml.includes('data-post-id="3"'));
+  assert.ok(postEditHtml.includes('admin-drag-handle'));
+  assert.ok(postEditHtml.includes('اسحب الإعلان وأفلته لتغيير ترتيبه في لوحة الإعلانات.'));
+  assert.ok(postEditHtml.includes('اسحب لتغيير ترتيب الإعلان عنوان قديم'));
+  assert.ok(postEditHtml.includes('اسحب لتغيير ترتيب الإعلان إعلان ثاني'));
+  assert.ok(!postEditHtml.includes('↑ للأعلى'));
+  assert.ok(!postEditHtml.includes('↓ للأسفل'));
+  assert.ok(!postEditHtml.includes('id="media-type"'));
+  assert.ok(!postEditHtml.includes('id="media-title"'));
 
   const mediaEditHtml = renderToStaticMarkup(
     <MediaLinksAdminPanel
@@ -629,6 +772,9 @@ test('Admin CRUD panels support edit mode with save/cancel actions and accessibl
   );
   assert.ok(mediaEditHtml.includes('حفظ التعديلات'));
   assert.ok(mediaEditHtml.includes('value="https://www.youtube.com/watch?v=dQw4w9WgXcQ"'));
+  assert.ok(mediaEditHtml.includes('value="reel"'));
+  assert.ok(mediaEditHtml.includes('value="post"'));
+  assert.ok(mediaEditHtml.includes('value="image"'));
 
   const formEditHtml = renderToStaticMarkup(
     <FormsAdminPanel
@@ -676,5 +822,6 @@ test('AdminDashboard and App keep onDataChanged callback stable to prevent infin
 
   assert.match(dashboardSrc, /useRef\(onDataChanged\)/);
   assert.doesNotMatch(dashboardSrc, /\[onDataChanged\]/);
+  assert.doesNotMatch(dashboardSrc, /syncMediaLinksIntoPosts/);
   assert.match(appSrc, /const handleAdminDataChanged = useCallback\(/);
 });

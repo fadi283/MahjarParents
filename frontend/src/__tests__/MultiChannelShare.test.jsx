@@ -478,22 +478,38 @@ test('AnnouncementCard and PostDetailView render a single unified Share menu but
 });
 
 test('EngagementSection and GoogleFormEmbed expose #form-<id> deep links via a single ShareActions trigger without overriding direct Google Form links', () => {
-  const sectionHtml = renderToStaticMarkup(
+  const defaultSectionHtml = renderToStaticMarkup(
     <EngagementSection
       forms={sampleForms}
       shareBaseUrl="https://mahjar.example.org"
     />
   );
 
-  assert.match(sectionHtml, /id="form-1"/);
-  assert.match(sectionHtml, /id="form-3"/);
-  assert.ok(!sectionHtml.includes('مشاركة عبر واتساب'));
+  assert.match(defaultSectionHtml, /id="form-1"/);
+  assert.match(defaultSectionHtml, /id="form-3"/);
+  assert.ok(!defaultSectionHtml.includes('مشاركة عبر واتساب'));
+  assert.doesNotMatch(
+    defaultSectionHtml,
+    /<iframe\b/,
+    'Default EngagementSection must not mount an iframe until a form is chosen'
+  );
 
-  const menuTriggerMatches = sectionHtml.match(/aria-haspopup="menu"/g) ?? [];
-  assert.equal(menuTriggerMatches.length, 3);
+  const defaultMenuTriggers = defaultSectionHtml.match(/aria-haspopup="menu"/g) ?? [];
+  assert.equal(defaultMenuTriggers.length, 2, 'One share trigger per form card when unselected');
+
+  const selectedSectionHtml = renderToStaticMarkup(
+    <EngagementSection
+      forms={sampleForms}
+      initialSelectedFormId={3}
+      shareBaseUrl="https://mahjar.example.org"
+    />
+  );
+
+  const menuTriggerMatches = selectedSectionHtml.match(/aria-haspopup="menu"/g) ?? [];
+  assert.equal(menuTriggerMatches.length, 3, 'Two card share triggers plus one in selected embed below');
 
   const waAttrMatches = [
-    ...sectionHtml.matchAll(/data-whatsapp-url="(https:\/\/wa\.me\/\?text=[^"]+)"/g),
+    ...selectedSectionHtml.matchAll(/data-whatsapp-url="(https:\/\/wa\.me\/\?text=[^"]+)"/g),
   ];
   assert.equal(waAttrMatches.length, 3);
   for (const match of waAttrMatches) {
@@ -519,12 +535,21 @@ test('EngagementSection and GoogleFormEmbed expose #form-<id> deep links via a s
   assert.match(embedHtml, /data-whatsapp-url="https:\/\/wa\.me\/\?text=[^"]+"/);
   assert.ok(
     embedHtml.includes(`href="${sampleForms[1].directUrl}"`),
-    'GoogleFormEmbed must preserve direct Google Forms links'
+    'GoogleFormEmbed must preserve bottom direct Google Forms link'
+  );
+  assert.ok(
+    embedHtml.includes('الانتقال المباشر للنموذج'),
+    'GoogleFormEmbed must preserve bottom الانتقال المباشر للنموذج button'
+  );
+  assert.ok(
+    !embedHtml.includes('فتح النموذج في نافذة جديدة'),
+    'GoogleFormEmbed must not render top فتح النموذج في نافذة جديدة link'
   );
 
   const appHtml = renderToStaticMarkup(<App />);
   assert.match(appHtml, /data-whatsapp-url="https:\/\/wa\.me\/\?text=[^"]*post-/);
-  assert.match(appHtml, /data-whatsapp-url="https:\/\/wa\.me\/\?text=[^"]*form-/);
+  const engagementAppHtml = renderToStaticMarkup(<App initialPage="engagement" />);
+  assert.match(engagementAppHtml, /data-whatsapp-url="https:\/\/wa\.me\/\?text=[^"]*form-/);
 });
 
 // 6. Open Graph & CSS checks

@@ -4,6 +4,22 @@ import react from '@vitejs/plugin-react';
 const apiProxyTarget =
   process.env.VITE_DEV_API_PROXY_TARGET || 'http://127.0.0.1:5000';
 
+function isLoopbackProxyTarget(targetUrl) {
+  try {
+    const { hostname } = new URL(targetUrl);
+    return (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname === '::1' ||
+      hostname === '[::1]'
+    );
+  } catch {
+    return false;
+  }
+}
+
+const useChangeOrigin = !isLoopbackProxyTarget(apiProxyTarget);
+
 export default defineConfig({
   plugins: [react()],
   server: {
@@ -12,7 +28,17 @@ export default defineConfig({
     proxy: {
       '/api': {
         target: apiProxyTarget,
-        changeOrigin: true,
+        changeOrigin: useChangeOrigin,
+        configure: useChangeOrigin
+          ? (proxy) => {
+              const targetOrigin = new URL(apiProxyTarget).origin;
+              proxy.on('proxyReq', (proxyReq, req) => {
+                if (req.headers.origin) {
+                  proxyReq.setHeader('origin', targetOrigin);
+                }
+              });
+            }
+          : undefined,
       },
     },
   },

@@ -22,6 +22,7 @@ export const defaultCommitteeMembers = [
   {
     id: 3,
     fullName: 'طه علي اغباريه',
+    isDirectContact: true,
     phone: '0525308582',
     email: 'taha-igbaria@hotmail.com',
     role: 'أمين الصندوق ومسؤول التواصل مع الأهالي',

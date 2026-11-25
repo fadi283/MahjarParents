@@ -11,8 +11,11 @@ import {
   normalizeEngagementForm,
 } from '../utils/engagementForms.js';
 import GoogleFormEmbed from '../components/GoogleFormEmbed.jsx';
-import EngagementSection from '../components/EngagementSection.jsx';
-import App from '../App.jsx';
+import EngagementSection, {
+  isCardActivationKey,
+  resolveSelectedEngagementForm,
+} from '../components/EngagementSection.jsx';
+import App, { resolvePageFromHash } from '../App.jsx';
 
 const sampleForms = [
   {
@@ -363,7 +366,7 @@ test('fetchPublicEngagementForms calls /api/forms without Authorization header a
 });
 
 // 4. GoogleFormEmbed
-test('GoogleFormEmbed renders RTL lazy-loaded Google Forms iframe and accessible direct fallback links', () => {
+test('GoogleFormEmbed renders RTL lazy-loaded Google Forms iframe and keeps only bottom الانتقال المباشر للنموذج link without top new-window button', () => {
   const html = renderToStaticMarkup(<GoogleFormEmbed form={sampleForms[0]} />);
 
   assert.match(html, /dir="rtl"/, 'GoogleFormEmbed must enforce RTL');
@@ -393,10 +396,23 @@ test('GoogleFormEmbed renders RTL lazy-loaded Google Forms iframe and accessible
     /sandbox="[^"]*allow-scripts[^"]*allow-forms[^"]*allow-same-origin[^"]*allow-popups[^"]*allow-popups-to-escape-sandbox[^"]*"/,
     'Iframe sandbox must include required Google Forms submission permissions'
   );
+  assert.ok(
+    !html.includes('فتح النموذج في نافذة جديدة'),
+    'GoogleFormEmbed must NOT render "فتح النموذج في نافذة جديدة" button'
+  );
+  assert.doesNotMatch(
+    html,
+    /engagement-embed__direct-link/,
+    'GoogleFormEmbed must NOT render .engagement-embed__direct-link'
+  );
+  assert.ok(
+    html.includes('الانتقال المباشر للنموذج'),
+    'GoogleFormEmbed must keep bottom "الانتقال المباشر للنموذج" button'
+  );
   assert.match(
     html,
-    /<a[^>]+href="https:\/\/docs\.google\.com\/forms\/d\/e\/1FAIpQLScMahjarFeedbackDefault01\/viewform"[^>]+target="_blank"[^>]+rel="noopener noreferrer"/,
-    'Direct fallback link must point to canonical directUrl (without embedded=true) and open safely in a new tab'
+    /<a[^>]+href="https:\/\/docs\.google\.com\/forms\/d\/e\/1FAIpQLScMahjarFeedbackDefault01\/viewform"[^>]+target="_blank"[^>]+rel="noopener noreferrer"[^>]*class="engagement-embed__fallback-btn"/,
+    'Bottom direct fallback button must point to canonical directUrl and open safely in a new tab'
   );
   assert.match(html, /min-height:\s*44px/);
   assert.match(html, /min-width:\s*44px/);
@@ -423,79 +439,197 @@ test('GoogleFormEmbed returns empty markup with no iframe for untrusted, inactiv
 });
 
 // 5. EngagementSection
-test('EngagementSection renders RTL zero-login view with category filters, fallback links, and single active lazy-loaded iframe', () => {
+test('EngagementSection renders RTL zero-login view with NO filter buttons, NO card action buttons, clickable cards, and NO embedded form by default', () => {
   const html = renderToStaticMarkup(<EngagementSection forms={sampleForms} />);
 
   assert.match(html, /id="engagement-section"/);
   assert.match(html, /dir="rtl"/);
-  assert.ok(html.includes('بدون تسجيل دخول'));
+  assert.ok(html.includes('دون الحاجة لإنشاء حساب أو تسجيل دخول'));
   assert.doesNotMatch(
     html,
     /<input[^>]+type="password"/i,
     'Zero-login engagement section must NOT render password or login inputs'
   );
-  assert.match(html, /role="toolbar"/);
-  assert.ok(html.includes('الكل'));
-  assert.ok(html.includes('إبداء الرأي والمقترحات'));
-  assert.ok(html.includes('طلب مساعدة أو طرح مشكلة'));
-  assert.ok(html.includes('التسجيل في فعالية'));
 
+  // Filter-by-type buttons must be completely removed
+  assert.doesNotMatch(
+    html,
+    /role="toolbar"/,
+    'EngagementSection must NOT render type filter toolbar'
+  );
+  assert.doesNotMatch(
+    html,
+    /engagement-section__filter-btn/,
+    'EngagementSection must NOT render type filter buttons'
+  );
+  assert.ok(!html.includes('>الكل<'), 'Must NOT render "الكل" filter button');
+
+  // All active form cards render cleanly without the removed buttons
   for (const form of sampleForms) {
     assert.ok(html.includes(form.title), `Should render form title: ${form.title}`);
-    assert.ok(
-      html.includes(`href="${form.directUrl}"`),
-      `Should render direct fallback link for ${form.formType}`
-    );
   }
+  assert.ok(
+    !html.includes('النموذج معروض أدناه'),
+    'Must NOT render "النموذج معروض أدناه" button in cards'
+  );
+  assert.ok(
+    !html.includes('تعبئة النموذج هنا'),
+    'Must NOT render "تعبئة النموذج هنا" button in cards'
+  );
+  assert.ok(
+    !html.includes('فتح مباشر'),
+    'Must NOT render "فتح مباشر" link in cards'
+  );
+  assert.ok(
+    !html.includes('فتح النموذج في نافذة جديدة'),
+    'Must NOT render "فتح النموذج في نافذة جديدة" link'
+  );
+  assert.doesNotMatch(html, /engagement-card__select-btn/);
+  assert.doesNotMatch(html, /engagement-card__fallback-link/);
+  assert.doesNotMatch(html, /engagement-card__actions/);
 
-  const iframeMatches = html.match(/<iframe\b/g) ?? [];
+  // Each card must be keyboard-focusable and clickable as a whole unit
+  const clickableCards = html.match(/engagement-card--clickable/g) ?? [];
   assert.equal(
-    iframeMatches.length,
-    1,
-    'EngagementSection should mount exactly one lazy-loaded iframe for the active selected form'
+    clickableCards.length,
+    sampleForms.length,
+    'Every engagement form card must be clickable across the entire card box'
   );
-  assert.match(
+  const focusableCards = html.match(/<article[^>]+tabindex="0"/gi) ?? [];
+  assert.equal(
+    focusableCards.length,
+    sampleForms.length,
+    'Every clickable engagement card must have tabIndex="0" for keyboard accessibility'
+  );
+
+  // Default state must NOT display any embedded form until the user chooses one
+  assert.doesNotMatch(
     html,
-    /<iframe[^>]+loading="lazy"[^>]+src="https:\/\/docs\.google\.com\/forms\/d\/e\/1FAIpQLScMahjarFeedbackDefault01\/viewform\?embedded=true"/
+    /<iframe\b/,
+    'Default state must NOT mount any iframe before user selects a form'
   );
-  assert.match(html, /aria-pressed="true"/);
-  assert.match(html, /min-height:\s*44px/);
-  assert.match(html, /min-width:\s*44px/);
+  assert.doesNotMatch(
+    html,
+    /engagement-section__embed-stage/,
+    'Default state must NOT render the embed stage before user selects a form'
+  );
+  assert.doesNotMatch(
+    html,
+    /engagement-card--active/,
+    'No card should be marked active in the default unselected state'
+  );
 });
 
-test('EngagementSection respects initialSelectedFormId and initialFormType and shows Arabic empty state when no valid forms match', () => {
-  const selectedHtml = renderToStaticMarkup(
-    <EngagementSection
-      forms={sampleForms}
-      initialFormType="event_registration"
-    />
-  );
-  assert.match(
-    selectedHtml,
-    /<iframe[^>]+1FAIpQLScMahjarEventRegDefault03\/viewform\?embedded=true/
-  );
-  assert.ok(!selectedHtml.includes('1FAIpQLScMahjarFeedbackDefault01/viewform?embedded=true'));
+test('EngagementSection opens selected form below when a form is chosen and keeps bottom الانتقال المباشر للنموذج button', () => {
+  assert.equal(resolveSelectedEngagementForm(sampleForms, null), null);
+  assert.equal(resolveSelectedEngagementForm(sampleForms, undefined), null);
+  assert.equal(resolveSelectedEngagementForm(sampleForms, 999), null);
+  assert.equal(resolveSelectedEngagementForm(sampleForms, 2)?.id, 2);
+
+  assert.equal(isCardActivationKey('Enter'), true);
+  assert.equal(isCardActivationKey(' '), true);
+  assert.equal(isCardActivationKey('Escape'), false);
+  assert.equal(isCardActivationKey('Tab'), false);
 
   const explicitHtml = renderToStaticMarkup(
     <EngagementSection forms={sampleForms} initialSelectedFormId={2} />
   );
+  const iframeMatches = explicitHtml.match(/<iframe\b/g) ?? [];
+  assert.equal(
+    iframeMatches.length,
+    1,
+    'Selecting a form must mount exactly one lazy-loaded iframe below'
+  );
   assert.match(
     explicitHtml,
-    /<iframe[^>]+1FAIpQLScMahjarHelpRequestDefault02\/viewform\?embedded=true/
+    /<iframe[^>]+loading="lazy"[^>]+1FAIpQLScMahjarHelpRequestDefault02\/viewform\?embedded=true/
+  );
+  assert.match(
+    explicitHtml,
+    /id="form-2"[^>]*class="[^"]*engagement-card--active/,
+    'Selected card must receive engagement-card--active highlight'
+  );
+  assert.ok(
+    explicitHtml.includes('الانتقال المباشر للنموذج'),
+    'Selected form embed below must keep [الانتقال المباشر للنموذج] button'
+  );
+  assert.ok(
+    !explicitHtml.includes('فتح النموذج في نافذة جديدة'),
+    'Selected form embed must NOT include "فتح النموذج في نافذة جديدة"'
+  );
+
+  // Verify EngagementSection source attaches click & keyboard activation on the card and stops propagation on Share
+  const sectionSrc = fs.readFileSync(
+    path.resolve(process.cwd(), 'src/components/EngagementSection.jsx'),
+    'utf-8'
+  );
+  assert.match(
+    sectionSrc,
+    /<article[\s\S]*?onClick=\{\(\)\s*=>\s*handleSelectForm\(form\)\}/,
+    'Whole engagement card <article> must open the form on click'
+  );
+  assert.match(
+    sectionSrc,
+    /className="engagement-card__share"[\s\S]*?stopPropagation/,
+    'Share wrapper inside card must stop propagation so sharing does not hijack card click'
   );
 
   const emptyHtml = renderToStaticMarkup(
-    <EngagementSection
-      forms={[{ ...sampleForms[0], active: false }]}
-    />
+    <EngagementSection forms={[{ ...sampleForms[0], active: false }]} />
   );
   assert.match(emptyHtml, /dir="rtl"/);
   assert.match(emptyHtml, /role="status"/);
   assert.doesNotMatch(emptyHtml, /<iframe\b/);
 });
 
+test('EngagementSection renders cohesive, accessible SVG-based direct contact buttons without raw emojis', () => {
+  const members = [
+    {
+      id: 3,
+      fullName: 'طه علي اغباريه',
+      role: 'أمين الصندوق ومسؤول التواصل مع الأهالي',
+      phone: '0525308582',
+      email: 'taha-igbaria@hotmail.com',
+      isDirectContact: true,
+    },
+  ];
+
+  const html = renderToStaticMarkup(
+    <EngagementSection forms={sampleForms} members={members} />
+  );
+
+  assert.ok(html.includes('تواصل مباشر مع اللجنة'));
+  assert.ok(html.includes('طه علي اغباريه'));
+  assert.ok(html.includes('أمين الصندوق ومسؤول التواصل مع الأهالي'));
+
+  // All 3 contact channels render with cohesive classes, accessible touch targets, and inline SVG icons
+  assert.match(html, /class="[^"]*direct-contact__btn[^"]*direct-contact__btn--phone[^"]*"/);
+  assert.match(html, /class="[^"]*direct-contact__btn[^"]*direct-contact__btn--whatsapp[^"]*"/);
+  assert.match(html, /class="[^"]*direct-contact__btn[^"]*direct-contact__btn--email[^"]*"/);
+  assert.match(html, /href="tel:0525308582"/);
+  assert.match(html, /href="https:\/\/wa\.me\/972525308582"/);
+  assert.match(html, /href="mailto:taha-igbaria@hotmail\.com"/);
+
+  const iconMatches = html.match(/class="direct-contact__icon"/g) ?? [];
+  assert.equal(
+    iconMatches.length,
+    3,
+    'All three direct contact buttons must use crisp inline SVG icons (.direct-contact__icon)'
+  );
+  assert.doesNotMatch(
+    html,
+    /[📞💬✉️]/u,
+    'Direct contact buttons must NOT use inconsistent raw emoji icons'
+  );
+});
+
 // 6. App integration
-test('App integrates EngagementSection alongside AnnouncementsFeed and CommitteeDirectory and hydrates/syncs /api/forms', () => {
+test('App integrates EngagementSection without showing any form by default and resolves #form-<id> deep links to engagement page', () => {
+  assert.equal(resolvePageFromHash('#form-2'), 'engagement');
+  assert.equal(resolvePageFromHash('#engagement'), 'engagement');
+  assert.equal(resolvePageFromHash('#committee'), 'committee');
+  assert.equal(resolvePageFromHash('#post-101'), 'announcements');
+
   const defaultHtml = renderToStaticMarkup(<App initialPage="engagement" />);
   assert.match(defaultHtml, /dir="rtl"/);
   assert.match(defaultHtml, /id="engagement-section"/);
@@ -504,9 +638,15 @@ test('App integrates EngagementSection alongside AnnouncementsFeed and Committee
   assert.match(defaultHtml, /href="#committee"/);
   assert.ok(!defaultHtml.includes('id="announcements-feed"'), 'only one page renders at a time');
   assert.ok(!defaultHtml.includes('id="committee-directory-heading"'), 'only one page renders at a time');
-  assert.match(
+  assert.doesNotMatch(
     defaultHtml,
-    /<iframe[^>]+loading="lazy"[^>]+https:\/\/docs\.google\.com\/forms\//
+    /<iframe\b/,
+    'App on engagement page must NOT display any form iframe by default'
+  );
+  assert.doesNotMatch(
+    defaultHtml,
+    /role="toolbar"/,
+    'App must NOT render any type filter toolbar'
   );
 
   const customFormsHtml = renderToStaticMarkup(
@@ -571,5 +711,20 @@ test('styles.css defines mobile-first grid, desktop breakpoints, and responsive 
     cssContent,
     /@media\s*\(min-width:\s*640px\)[\s\S]*?\.engagement-embed__iframe\s*\{[^}]*min-height:\s*\d+px/s,
     'Engagement iframe must define larger desktop min-height at >= 640px'
+  );
+  assert.match(
+    cssContent,
+    /\.engagement-card--clickable\s*\{[^}]*cursor:\s*pointer/s,
+    'Clickable engagement cards must expose cursor: pointer'
+  );
+  assert.match(
+    cssContent,
+    /\.direct-contact__actions\s*\{[^}]*display:\s*grid/s,
+    'Direct contact actions must use an aligned equal-width grid layout'
+  );
+  assert.match(
+    cssContent,
+    /\.direct-contact__btn\s*\{[^}]*min-height:\s*(?:4[4-9]|[5-9]\d)px/s,
+    'Direct contact buttons must enforce accessible >= 44px height in CSS'
   );
 });

@@ -613,3 +613,600 @@ class TestFlaskMediaEndpoints:
         assert post["mediaLinks"][0]["embedUrl"] == "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ"
         assert post["mediaLinks"][1]["provider"] == "google_drive"
         assert post["mediaLinks"][1]["embedUrl"] == "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQr/preview"
+
+    @pytest.mark.parametrize(
+        "raw_url, explicit_type, expected_type, expected_provider, expected_mode, expected_embed_prefix",
+        [
+            (
+                "https://www.instagram.com/reel/C5AbCdEfGhI/?igsh=xyz",
+                None,
+                "reel",
+                "instagram",
+                "iframe",
+                "https://www.instagram.com/reel/C5AbCdEfGhI/embed/",
+            ),
+            (
+                "https://www.instagram.com/mahjar_school/reel/C5AbCdEfGhI/",
+                None,
+                "reel",
+                "instagram",
+                "iframe",
+                "https://www.instagram.com/reel/C5AbCdEfGhI/embed/",
+            ),
+            (
+                "https://www.instagram.com/p/C5AbCdEfGhI/",
+                None,
+                "post",
+                "instagram",
+                "iframe",
+                "https://www.instagram.com/p/C5AbCdEfGhI/embed/",
+            ),
+            (
+                "https://www.instagram.com/tv/C5AbCdEfGhI/",
+                None,
+                "video",
+                "instagram",
+                "iframe",
+                "https://www.instagram.com/tv/C5AbCdEfGhI/embed/",
+            ),
+            (
+                "https://www.instagram.com/stories/mahjar.school/34567890123456/",
+                None,
+                "post",
+                "instagram",
+                "card",
+                "",
+            ),
+            (
+                "https://www.facebook.com/reel/123456789012345",
+                None,
+                "reel",
+                "facebook",
+                "iframe",
+                "https://www.facebook.com/plugins/video.php?href=",
+            ),
+            (
+                "https://www.facebook.com/watch/?v=9876543210",
+                None,
+                "video",
+                "facebook",
+                "iframe",
+                "https://www.facebook.com/plugins/video.php?href=",
+            ),
+            (
+                "https://www.facebook.com/mahjar.school/posts/pfbid02XYZ123",
+                None,
+                "post",
+                "facebook",
+                "iframe",
+                "https://www.facebook.com/plugins/post.php?href=",
+            ),
+            (
+                "https://www.facebook.com/photo/?fbid=1122334455",
+                None,
+                "post",
+                "facebook",
+                "iframe",
+                "https://www.facebook.com/plugins/post.php?href=",
+            ),
+            (
+                "https://www.facebook.com/groups/123456/videos/987654321/",
+                None,
+                "video",
+                "facebook",
+                "iframe",
+                "https://www.facebook.com/plugins/video.php?href=",
+            ),
+            (
+                "https://fb.watch/abc123XYZ/",
+                None,
+                "video",
+                "facebook",
+                "card",
+                "",
+            ),
+            (
+                "https://www.facebook.com/share/r/AbCdEf123/",
+                None,
+                "reel",
+                "facebook",
+                "card",
+                "",
+            ),
+            (
+                "https://www.facebook.com/share/v/19kinDFpk5/",
+                None,
+                "video",
+                "facebook",
+                "card",
+                "",
+            ),
+            (
+                "https://www.tiktok.com/@mahjarschool/video/7345678901234567890",
+                None,
+                "reel",
+                "tiktok",
+                "iframe",
+                "https://www.tiktok.com/embed/v2/7345678901234567890",
+            ),
+            (
+                "https://www.tiktok.com/@mahjarschool/photo/7345678901234567890",
+                None,
+                "post",
+                "tiktok",
+                "card",
+                "",
+            ),
+            (
+                "https://vm.tiktok.com/ZMrAbCdEf/",
+                None,
+                "reel",
+                "tiktok",
+                "card",
+                "",
+            ),
+            (
+                "https://x.com/mahjar_school/status/1800123456789012345",
+                None,
+                "post",
+                "x",
+                "card",
+                "",
+            ),
+            (
+                "https://www.threads.net/@mahjar.school/post/C9AbCdEf123",
+                None,
+                "post",
+                "threads",
+                "iframe",
+                "https://www.threads.net/@mahjar.school/post/C9AbCdEf123/embed",
+            ),
+            (
+                "https://www.linkedin.com/posts/mahjar-school_activity-12345",
+                None,
+                "post",
+                "linkedin",
+                "iframe",
+                "https://www.linkedin.com/embed/feed/update/urn:li:activity:12345",
+            ),
+            (
+                "https://t.me/mahjar_parents/42",
+                None,
+                "post",
+                "telegram",
+                "iframe",
+                "https://t.me/mahjar_parents/42?embed=1",
+            ),
+            (
+                "https://open.spotify.com/episode/4rOoJ6Egrf8K2IrywzwOMk",
+                None,
+                "audio",
+                "spotify",
+                "iframe",
+                "https://open.spotify.com/embed/episode/4rOoJ6Egrf8K2IrywzwOMk",
+            ),
+            (
+                "https://www.dailymotion.com/video/x8abcde",
+                None,
+                "video",
+                "dailymotion",
+                "iframe",
+                "https://www.dailymotion.com/embed/video/x8abcde",
+            ),
+            (
+                "https://photos.app.goo.gl/AbCdEfGh123",
+                None,
+                "image",
+                "google_photos",
+                "card",
+                "",
+            ),
+            (
+                "https://www.canva.com/design/DAGAbCdEfGh/view",
+                None,
+                "post",
+                "canva",
+                "iframe",
+                "https://www.canva.com/design/DAGAbCdEfGh/view?embed",
+            ),
+            (
+                "https://cdn.example.org/gallery/heritage-day.webp",
+                None,
+                "image",
+                "external_image",
+                "image",
+                "",
+            ),
+            (
+                "https://images.example.org/render?id=991",
+                "image",
+                "image",
+                "external_image",
+                "image",
+                "",
+            ),
+            (
+                "https://www.youtube.com/shorts/dQw4w9WgXcQ",
+                "reel",
+                "reel",
+                "youtube",
+                "iframe",
+                "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+            ),
+            (
+                "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQr/view",
+                "video",
+                "video",
+                "google_drive",
+                "iframe",
+                "https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQr/preview",
+            ),
+        ],
+    )
+    def test_validates_social_reels_posts_external_images_and_audio(
+        self,
+        raw_url,
+        explicit_type,
+        expected_type,
+        expected_provider,
+        expected_mode,
+        expected_embed_prefix,
+    ):
+        result = media_pipeline.validate_external_media_url(raw_url, media_type=explicit_type)
+        assert result["mediaType"] == expected_type
+        assert result["provider"] == expected_provider
+        assert result["renderMode"] == expected_mode
+        assert result["hostedExternally"] is True
+        if expected_embed_prefix:
+            assert result["embedUrl"].startswith(expected_embed_prefix)
+        else:
+            assert result["embedUrl"] == ""
+
+    @pytest.mark.parametrize(
+        "bad_url, media_type, expected_code",
+        [
+            ("https://127.0.0.1/photo.jpg", None, "UNTRUSTED_MEDIA_DOMAIN"),
+            ("https://localhost/banner.png", "image", "UNTRUSTED_MEDIA_DOMAIN"),
+            ("https://cdn.example.org/icon.svg", "image", "UNTRUSTED_MEDIA_DOMAIN"),
+            ("https://cdn.example.org/clip.mp4", "image", "UNTRUSTED_MEDIA_DOMAIN"),
+            ("https://www.instagram.com/unknown/abc", None, "INVALID_MEDIA_URL"),
+            (
+                "https://www.facebook.com/plugins/video.php?href=https://evil.com/x",
+                None,
+                "UNTRUSTED_MEDIA_DOMAIN",
+            ),
+            (
+                "https://x.com/mahjar_school/status/1800123456789012345",
+                "audio",
+                "MEDIA_TYPE_MISMATCH",
+            ),
+            (
+                "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+                "podcast",
+                "INVALID_MEDIA_TYPE",
+            ),
+        ],
+    )
+    def test_rejects_unsafe_private_image_and_invalid_social_urls(
+        self, bad_url, media_type, expected_code
+    ):
+        with pytest.raises(media_pipeline.MediaValidationError) as exc_info:
+            media_pipeline.validate_external_media_url(bad_url, media_type=media_type)
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.code == expected_code
+
+    def test_posts_feed_preserves_card_and_image_media_links_with_empty_embed_url(
+        self, client, post_factory, mock_posts_source
+    ):
+        mock_posts_source([
+            post_factory(
+                id=302,
+                title="تغطية مصورة عبر منصات التواصل",
+                mediaLinks=[
+                    {
+                        "url": "https://x.com/mahjar_school/status/1800123456789012345",
+                        "title": "منشور X",
+                    },
+                    {
+                        "url": "https://cdn.example.org/photos/event.webp",
+                        "title": "صورة خارجية",
+                    },
+                    {
+                        "url": "https://www.instagram.com/reel/C5AbCdEfGhI/",
+                        "title": "رييل الفعالية",
+                    },
+                ],
+            )
+        ])
+
+        response = client.get("/api/posts")
+        assert response.status_code == 200
+        [post] = response.get_json()
+        assert len(post["mediaLinks"]) == 3
+        assert post["mediaLinks"][0]["provider"] == "x"
+        assert post["mediaLinks"][0]["renderMode"] == "card"
+        assert post["mediaLinks"][1]["provider"] == "external_image"
+        assert post["mediaLinks"][1]["renderMode"] == "image"
+        assert post["mediaLinks"][2]["provider"] == "instagram"
+        assert post["mediaLinks"][2]["mediaType"] == "reel"
+        assert post["mediaLinks"][2]["renderMode"] == "iframe"
+
+    def test_resolve_short_social_url_follows_safe_same_platform_redirects_and_blocks_unsafe(
+        self,
+    ):
+        import urllib.error
+
+        class FakeOpener:
+            def __init__(self, mapping):
+                self.mapping = mapping
+                self.visited = []
+
+            def open(self, req, timeout=3.0):
+                url = req.full_url
+                self.visited.append(url)
+                action = self.mapping.get(url)
+                if action is None:
+                    raise urllib.error.URLError("not mocked")
+                code, loc = action
+                if code in (301, 302, 303, 307, 308):
+                    raise urllib.error.HTTPError(
+                        url, code, "Redirect", {"Location": loc}, None
+                    )
+                class _OKResp:
+                    status = code
+                    headers = {}
+                    def geturl(self):
+                        return url
+                    def close(self):
+                        pass
+                return _OKResp()
+
+        fb_opener = FakeOpener({
+            "https://www.facebook.com/share/v/19kinDFpk5/": (
+                302,
+                "https://www.facebook.com/mahjar.school/videos/987654321/",
+            ),
+            "https://www.facebook.com/mahjar.school/videos/987654321/": (200, ""),
+        })
+        assert (
+            media_pipeline.resolve_short_social_url(
+                "https://www.facebook.com/share/v/19kinDFpk5/", opener=fb_opener
+            )
+            == "https://www.facebook.com/mahjar.school/videos/987654321/"
+        )
+
+        tt_opener = FakeOpener({
+            "https://vm.tiktok.com/ZMrAbCdEf/": (
+                301,
+                "https://www.tiktok.com/@mahjar/video/7345678901234567890",
+            ),
+            "https://www.tiktok.com/@mahjar/video/7345678901234567890": (200, ""),
+        })
+        assert (
+            media_pipeline.resolve_short_social_url(
+                "https://vm.tiktok.com/ZMrAbCdEf/", opener=tt_opener
+            )
+            == "https://www.tiktok.com/@mahjar/video/7345678901234567890"
+        )
+
+        # Off-domain / insecure redirect must NOT be followed and falls back safely
+        evil_opener = FakeOpener({
+            "https://www.facebook.com/share/v/19kinDFpk5/": (
+                302,
+                "https://evil.example.com/phish",
+            ),
+        })
+        assert (
+            media_pipeline.resolve_short_social_url(
+                "https://www.facebook.com/share/v/19kinDFpk5/", opener=evil_opener
+            )
+            == "https://www.facebook.com/share/v/19kinDFpk5/"
+        )
+        assert evil_opener.visited == ["https://www.facebook.com/share/v/19kinDFpk5/"]
+
+        # Login wall without next param falls back safely to original share URL
+        login_opener = FakeOpener({
+            "https://www.facebook.com/share/v/19kinDFpk5/": (
+                302,
+                "https://www.facebook.com/login/?locale=ar_AR",
+            ),
+        })
+        assert (
+            media_pipeline.resolve_short_social_url(
+                "https://www.facebook.com/share/v/19kinDFpk5/", opener=login_opener
+            )
+            == "https://www.facebook.com/share/v/19kinDFpk5/"
+        )
+
+        # Login wall WITH safe same-platform ?next= extracts the true video URL
+        login_next_opener = FakeOpener({
+            "https://www.facebook.com/share/v/19kinDFpk5/": (
+                302,
+                "https://www.facebook.com/login/?next=https%3A%2F%2Fwww.facebook.com%2Fwatch%2F%3Fv%3D987654321",
+            ),
+        })
+        assert (
+            media_pipeline.resolve_short_social_url(
+                "https://www.facebook.com/share/v/19kinDFpk5/", opener=login_next_opener
+            )
+            == "https://www.facebook.com/watch/?v=987654321"
+        )
+
+        # 200 OK HTML page with og:url or video_id extracts canonical Facebook URL
+        class FakeHtmlOpener:
+            def __init__(self, body: bytes):
+                self.body = body
+
+            def open(self, req, timeout=4.0):
+                body = self.body
+                class _HtmlResp:
+                    status = 200
+                    headers = {}
+                    def geturl(self):
+                        return req.full_url
+                    def read(self, _n=-1):
+                        return body
+                    def close(self):
+                        pass
+                return _HtmlResp()
+
+        og_html = b'<html><head><meta property="og:url" content="https://www.facebook.com/mahjar.school/videos/987654321/"></head></html>'
+        assert (
+            media_pipeline.resolve_short_social_url(
+                "https://www.facebook.com/share/v/19kinDFpk5/",
+                opener=FakeHtmlOpener(og_html),
+            )
+            == "https://www.facebook.com/mahjar.school/videos/987654321/"
+        )
+
+        vid_html = b'<script>{"video_id":"987654321"}</script>'
+        assert (
+            media_pipeline.resolve_short_social_url(
+                "https://www.facebook.com/share/v/19kinDFpk5/",
+                opener=FakeHtmlOpener(vid_html),
+            )
+            == "https://www.facebook.com/watch/?v=987654321"
+        )
+
+        # sanitize_external_media_links preserves resolved canonicalUrl over originalUrl
+        sanitized = media_pipeline.sanitize_external_media_links([
+            {
+                "canonicalUrl": "https://www.facebook.com/watch/?v=987654321",
+                "originalUrl": "https://www.facebook.com/share/v/19kinDFpk5/",
+                "aspectWidth": 720,
+                "aspectHeight": 1280,
+            }
+        ])
+        assert len(sanitized) == 1
+        assert sanitized[0]["renderMode"] == "iframe"
+        assert "plugins/video.php" in sanitized[0]["embedUrl"]
+        assert sanitized[0]["aspectWidth"] == 720
+        assert sanitized[0]["aspectHeight"] == 1280
+
+        # Default aspect ratios on YouTube Shorts vs standard YouTube
+        yt_short = media_pipeline.validate_external_media_url(
+            "https://www.youtube.com/shorts/dQw4w9WgXcQ"
+        )
+        assert (yt_short["aspectWidth"], yt_short["aspectHeight"]) == (9, 16)
+        yt_std = media_pipeline.validate_external_media_url(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        )
+        assert (yt_std["aspectWidth"], yt_std["aspectHeight"]) == (16, 9)
+
+        # probe_media_dimensions extracts og:video and Facebook original_width/height
+        portrait_og_html = (
+            b'<html><head>'
+            b'<meta property="og:video:width" content="720">'
+            b'<meta property="og:video:height" content="1280">'
+            b'</head></html>'
+        )
+        assert (
+            media_pipeline.probe_media_dimensions(
+                "https://www.facebook.com/watch/?v=987654321",
+                opener=FakeHtmlOpener(portrait_og_html),
+            )
+            == (720, 1280)
+        )
+
+        fb_json_html = b'<script>{"original_width":540,"original_height":960}</script>'
+        assert (
+            media_pipeline.probe_media_dimensions(
+                "https://www.facebook.com/watch/?v=987654321",
+                opener=FakeHtmlOpener(fb_json_html),
+            )
+            == (540, 960)
+        )
+
+        # Facebook plugins/video.php real HTML (data-video-width/height + padding-bottom + sprite widths)
+        plugin_landscape_html = (
+            b'<div class="_53j5 _37u6 _9kkd" style="padding-bottom:56.20%;" tabindex="0">'
+            b'<video height="281" width="500" preload="auto" class="_ox1 _21y0" '
+            b'data-video-width="500" data-video-height="281" id="u_0_1"></video>'
+            b'</div><script>{"width":12,"height":12}</script>'
+        )
+        assert (
+            media_pipeline.probe_media_dimensions(
+                "https://www.facebook.com/plugins/video.php?href=https%3A%2F%2Fwww.facebook.com%2Freel%2F1391452396433188&show_text=false",
+                opener=FakeHtmlOpener(plugin_landscape_html),
+            )
+            == (500, 281)
+        )
+
+        plugin_portrait_html = (
+            b'<div class="_53j5 _37u6 _9kkd" style="padding-bottom:134.40%;" tabindex="0">'
+            b'<video height="672" width="500" preload="auto" class="_ox1 _21y0" '
+            b'data-video-width="500" data-video-height="672" id="u_0_2"></video>'
+            b'</div><script>{"width":12,"height":12}</script>'
+        )
+        assert (
+            media_pipeline.probe_media_dimensions(
+                "https://www.facebook.com/plugins/video.php?href=https%3A%2F%2Fwww.facebook.com%2Freel%2F970468269089750&show_text=false",
+                opener=FakeHtmlOpener(plugin_portrait_html),
+            )
+            == (500, 672)
+        )
+
+        padding_only_html = (
+            b'<div class="_53j5" style="padding-bottom:56.20%;"></div>'
+            b'<script>{"width":200,"height":200}</script>'
+        )
+        assert (
+            media_pipeline.probe_media_dimensions(
+                "https://www.facebook.com/plugins/video.php?href=https%3A%2F%2Fwww.facebook.com%2Freel%2F1391452396433188&show_text=false",
+                opener=FakeHtmlOpener(padding_only_html),
+            )
+            == (1000, 562)
+        )
+
+        video_wh_html = b'<script>{"video_width":1280,"video_height":720}</script>'
+        assert (
+            media_pipeline.probe_media_dimensions(
+                "https://www.facebook.com/watch/?v=555666777",
+                opener=FakeHtmlOpener(video_wh_html),
+            )
+            == (1280, 720)
+        )
+
+        # Landscape Facebook /reel/ preserves landscape dimensions when probed via plugins/video.php
+        orig_probe = media_pipeline.probe_media_dimensions
+        try:
+            media_pipeline.probe_media_dimensions = (
+                lambda raw_u, **_kw: (1280, 720) if "plugins/video.php" in raw_u else None
+            )
+            landscape_reel = media_pipeline.validate_external_media_url(
+                "https://www.facebook.com/reel/1391452396433188",
+                resolve_redirects=True,
+            )
+            assert landscape_reel["mediaType"] == "reel"
+            assert (landscape_reel["aspectWidth"], landscape_reel["aspectHeight"]) == (1280, 720)
+        finally:
+            media_pipeline.probe_media_dimensions = orig_probe
+
+        # /share/p/ HTML containing JSON-escaped permalink.php resolves cleanly
+        share_post_html = (
+            b'<script>{"share_url":"https:\\/\\/www.facebook.com\\/permalink.php?story_fbid=pfbid02XYZ123&id=61578863263906"}</script>'
+        )
+        assert (
+            media_pipeline.resolve_short_social_url(
+                "https://www.facebook.com/share/p/18AbCdEfGh/",
+                opener=FakeHtmlOpener(share_post_html),
+            )
+            == "https://www.facebook.com/permalink.php?story_fbid=pfbid02XYZ123&id=61578863263906"
+        )
+
+        # sanitize_external_media_links(..., resolve_redirects=True) preserves stored dimensions
+        # without re-probing direct canonical URLs
+        sanitized_stored = media_pipeline.sanitize_external_media_links(
+            [
+                {
+                    "canonicalUrl": "https://www.facebook.com/reel/1391452396433188",
+                    "originalUrl": "https://www.facebook.com/reel/1391452396433188",
+                    "mediaType": "reel",
+                    "aspectWidth": 1280,
+                    "aspectHeight": 720,
+                }
+            ],
+            resolve_redirects=True,
+        )
+        assert len(sanitized_stored) == 1
+        assert (sanitized_stored[0]["aspectWidth"], sanitized_stored[0]["aspectHeight"]) == (1280, 720)

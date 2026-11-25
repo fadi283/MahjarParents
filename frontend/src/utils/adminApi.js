@@ -14,7 +14,9 @@ const ERROR_MESSAGES_AR = {
   INSECURE_FORM_URL: 'يجب أن يستخدم رابط Google Forms بروتوكول HTTPS.',
   INVALID_FORM_URL: 'رابط نموذج Google Forms غير صالح.',
   UNTRUSTED_MEDIA_DOMAIN:
-    'رابط الوسائط من نطاق غير مسموح به. يُسمح فقط بالمنصات المعتمدة: YouTube وVimeo وSoundCloud وGoogle Drive.',
+    'رابط الوسائط من نطاق غير مسموح به أو صيغته غير مدعومة. المنصات المعتمدة تشمل: YouTube، Instagram، Facebook، TikTok، X، Threads، LinkedIn، Telegram، Vimeo، Dailymotion، SoundCloud، Spotify، Google Drive، Google Photos، Canva، بالإضافة إلى روابط الصور الخارجية الآمنة HTTPS.',
+  INVALID_MEDIA_TYPE: 'نوع الوسائط المحدد غير صالح.',
+  MEDIA_TYPE_MISMATCH: 'نوع الوسائط المحدد لا يتوافق مع محتوى الرابط المدخل.',
   INSECURE_MEDIA_URL: 'يجب أن يستخدم رابط الوسائط بروتوكول HTTPS.',
   RAW_AV_NOT_ALLOWED:
     'لا يُسمح برفع ملفات الفيديو أو الصوت الخام مباشرة؛ يرجى استضافتها خارجياً وإضافة الرابط فقط.',
@@ -225,6 +227,13 @@ export function createAdminApiClient({
 
     deletePost(id) {
       return request(`/api/admin/posts/${id}`, { method: 'DELETE' });
+    },
+
+    reorderPosts(postIds) {
+      return request('/api/admin/posts/reorder', {
+        method: 'PUT',
+        body: { postIds },
+      });
     },
 
     listMediaLinks(postId = null) {

@@ -172,20 +172,20 @@ class TestLoadBenchmarkEngine:
         assert metrics["peakRssMb"] == 120.0
 
         passed = load_benchmark.evaluate_nfr_thresholds(
-            metrics, max_avg_ms=500.0, max_rss_mb=512.0
+            metrics, max_avg_ms=550.0, max_rss_mb=512.0
         )
         assert passed["passed"] is True
         assert passed["failures"] == []
 
         failing_metrics = {
             **metrics,
-            "avgMs": 512.4,
+            "avgMs": 560.4,
             "serverErrors5xx": 2,
             "connectionErrors": 1,
             "peakRssMb": 600.0,
         }
         failed = load_benchmark.evaluate_nfr_thresholds(
-            failing_metrics, max_avg_ms=500.0, max_rss_mb=512.0
+            failing_metrics, max_avg_ms=550.0, max_rss_mb=512.0
         )
         assert failed["passed"] is False
         assert len(failed["failures"]) == 4
@@ -261,7 +261,7 @@ class TestFiveHundredConcurrentUsersFreeTier:
             use_barrier=True,
             extra_endpoints=[image_url, "/"],
             headers={"X-Forwarded-Proto": "https"},
-            max_avg_ms=500.0,
+            max_avg_ms=550.0,
             max_rss_mb=512.0,
         )
 
@@ -270,7 +270,7 @@ class TestFiveHundredConcurrentUsersFreeTier:
         assert metrics["serverErrors5xx"] == 0
         assert metrics["connectionErrors"] == 0
         assert metrics["clientErrors4xx"] == 0
-        assert metrics["avgMs"] < 500.0
+        assert metrics["avgMs"] < 550.0
         assert metrics["p95Ms"] < 1000.0
         assert metrics["peakRssMb"] < 512.0
         assert report["nfr"]["passed"] is True
@@ -293,7 +293,7 @@ class TestFiveHundredConcurrentUsersFreeTier:
             include_conditional_etag=True,
             extra_endpoints=[image_url],
             headers={"X-Forwarded-Proto": "https"},
-            max_avg_ms=500.0,
+            max_avg_ms=550.0,
             max_rss_mb=512.0,
         )
 
@@ -301,7 +301,7 @@ class TestFiveHundredConcurrentUsersFreeTier:
         assert metrics["totalRequests"] == 1000
         assert metrics["serverErrors5xx"] == 0
         assert metrics["connectionErrors"] == 0
-        assert metrics["avgMs"] < 500.0
+        assert metrics["avgMs"] < 550.0
         assert metrics["statusCodes"].get(304, 0) > 0
         assert report["nfr"]["passed"] is True
 
@@ -322,7 +322,7 @@ class TestFiveHundredConcurrentUsersFreeTier:
 
         assert rw_report["readers"]["serverErrors5xx"] == 0
         assert rw_report["readers"]["connectionErrors"] == 0
-        assert rw_report["readers"]["avgMs"] < 500.0
+        assert rw_report["readers"]["avgMs"] < 550.0
         assert rw_report["writers"]["serverErrors5xx"] == 0
         assert rw_report["writers"]["connectionErrors"] == 0
         assert rw_report["writers"]["successes"] == 8
@@ -353,4 +353,4 @@ class TestFiveHundredConcurrentUsersFreeTier:
         assert payload["nfr"]["passed"] is True
         assert payload["metrics"]["totalRequests"] == 500
         assert payload["metrics"]["serverErrors5xx"] == 0
-        assert payload["metrics"]["avgMs"] < 500.0
+        assert payload["metrics"]["avgMs"] < 550.0

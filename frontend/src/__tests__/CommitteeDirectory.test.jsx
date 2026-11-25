@@ -57,23 +57,30 @@ test('CommitteeMemberCard does NOT render an initials circle or avatar placehold
   assert.ok(html.includes('أمين الصندوق'), 'Should still render member role');
 });
 
-test('CommitteeMemberCard renders a "للتواصل" button with accessible touch target (>= 44x44px) when member has an email', () => {
+test('CommitteeMemberCard does NOT render a "للتواصل" button or mailto link even when member has an email or contactUrl', () => {
   const html = renderToStaticMarkup(
     <CommitteeMemberCard member={sampleMemberWithAvatarAndEmail} />
   );
 
-  assert.match(html, /href="mailto:ahmad@mahjar-parents\.org"/, 'Contact button should link to mailto:email');
-  assert.ok(html.includes('>للتواصل<'), 'Contact button text should be "للتواصل"');
-  assert.match(
-    html,
-    /min-height:\s*44px/,
-    'Interactive contact button must enforce min-height: 44px'
+  assert.doesNotMatch(html, /mailto:/, 'Should NOT render any mailto: contact link');
+  assert.doesNotMatch(html, /للتواصل/, 'Should NOT render "للتواصل" contact button');
+  assert.doesNotMatch(html, /committee-card__actions/, 'Should NOT render committee-card__actions container');
+  assert.doesNotMatch(html, /<a\b/, 'Should NOT render any <a> action link');
+  assert.doesNotMatch(html, /<button/, 'Should NOT render any <button> element');
+
+  const contactUrlHtml = renderToStaticMarkup(
+    <CommitteeMemberCard
+      member={{
+        ...sampleMemberWithoutAvatarOrEmail,
+        contactUrl: 'mailto:contact@mahjar-parents.org',
+        contact_url: 'https://example.com/contact',
+      }}
+    />
   );
-  assert.match(
-    html,
-    /min-width:\s*44px/,
-    'Interactive contact button must enforce min-width: 44px'
-  );
+  assert.doesNotMatch(contactUrlHtml, /mailto:/, 'Should NOT render mailto: from contactUrl');
+  assert.doesNotMatch(contactUrlHtml, /للتواصل/, 'Should NOT render "للتواصل" from contactUrl');
+  assert.doesNotMatch(contactUrlHtml, /committee-card__actions/, 'Should NOT render actions container');
+  assert.doesNotMatch(contactUrlHtml, /<a\b/, 'Should NOT render any <a> action link');
 });
 
 test('CommitteeMemberCard does NOT render any button ("للتواصل" or "تفاصيل المهام") when member has no email', () => {
@@ -87,7 +94,7 @@ test('CommitteeMemberCard does NOT render any button ("للتواصل" or "تف�
   assert.doesNotMatch(html, /<a\b/, 'Should NOT render any <a> action link');
 });
 
-test('CommitteeDirectory renders a mobile-first RTL section with all provided committee members', () => {
+test('CommitteeDirectory renders a mobile-first RTL section with all provided committee members and no filter buttons', () => {
   const members = [sampleMemberWithAvatarAndEmail, sampleMemberWithoutAvatarOrEmail];
   const html = renderToStaticMarkup(<CommitteeDirectory members={members} />);
 
@@ -95,6 +102,7 @@ test('CommitteeDirectory renders a mobile-first RTL section with all provided co
   assert.ok(html.includes('أعضاء لجنة أولياء الأمور'), 'Should render Arabic section heading for committee directory');
   assert.ok(html.includes('أحمد محمود العلي'), 'Should render first member');
   assert.ok(html.includes('فاطمة خالد الحسن'), 'Should render second member');
+  assert.doesNotMatch(html, /role="toolbar"/, 'CommitteeDirectory must NOT render any filter toolbar');
 });
 
 test('CommitteeDirectory handles empty state gracefully when members array is empty', () => {
@@ -145,13 +153,12 @@ test('App renders the CommitteeDirectory with default committee members in RTL l
   );
   assert.doesNotMatch(html, /avatar-placeholder/, 'App should not render any initials circle');
   assert.doesNotMatch(html, /تفاصيل المهام/, 'App should not render "تفاصيل المهام" button');
-  assert.ok(html.includes('>للتواصل<'), 'Members with email should show "للتواصل" button');
-  assert.match(html, /href="mailto:Egb\.fadi@gmail\.com"/, 'Should render mailto link for chair email');
-  assert.match(html, /min-height:\s*44px/, 'Contact buttons must have >= 44x44px touch targets');
-  assert.match(html, /min-width:\s*44px/, 'Contact buttons must have >= 44x44px touch targets');
+  assert.doesNotMatch(html, />للتواصل</, 'App committee directory should NOT render "للتواصل" button');
+  assert.doesNotMatch(html, /committee-card__actions/, 'App committee directory should NOT render committee-card__actions');
+  assert.doesNotMatch(html, /mailto:/, 'App committee directory should NOT render any mailto: links');
 });
 
-test('CommitteeMemberCard supports snake_case fields and email/contactUrl formats from Flask API payloads and hides avatar when whitespace', () => {
+test('CommitteeMemberCard supports snake_case fields from Flask API payloads, hides avatar when whitespace, and omits email contact actions', () => {
   const apiMember = {
     id: 99,
     full_name: 'ليلى عبد الرحمن',
@@ -168,6 +175,6 @@ test('CommitteeMemberCard supports snake_case fields and email/contactUrl format
   assert.ok(html.includes('متابعة الأنشطة الثقافية والمكتبة المدرسية.'), 'Should support responsibility_summary snake_case field');
   assert.doesNotMatch(html, /<img/, 'Whitespace-only avatar_url should not render an <img>');
   assert.doesNotMatch(html, /avatar-placeholder/, 'Whitespace-only avatar_url should not render any placeholder circle');
-  assert.match(html, /href="mailto:laila@mahjar-parents\.org"/, 'Should render mailto link for email');
-  assert.ok(html.includes('>للتواصل<'), 'Should render "للتواصل" label');
+  assert.doesNotMatch(html, /mailto:/, 'Should NOT render mailto: link for email');
+  assert.doesNotMatch(html, /للتواصل/, 'Should NOT render "للتواصل" label');
 });

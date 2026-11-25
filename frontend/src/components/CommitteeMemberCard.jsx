@@ -9,25 +9,11 @@ export default function CommitteeMemberCard({ member, apiBaseUrl = API_BASE_URL 
   const responsibilitySummary =
     member.responsibilitySummary ?? member.responsibility_summary ?? '';
   const avatarUrl = member.avatarUrl ?? member.avatar_url ?? '';
-  const rawEmail =
-    member.email ?? member.contactUrl ?? member.contact_url ?? '';
 
   const hasAvatar = Boolean(avatarUrl && avatarUrl.trim());
   const resolvedAvatarUrl = hasAvatar
     ? resolveMediaUrl(avatarUrl.trim(), apiBaseUrl)
     : '';
-  const trimmedEmail = rawEmail ? rawEmail.trim() : '';
-  const hasEmail = Boolean(trimmedEmail);
-  const contactHref = hasEmail
-    ? trimmedEmail.startsWith('mailto:') || trimmedEmail.startsWith('http')
-      ? trimmedEmail
-      : `mailto:${trimmedEmail}`
-    : '';
-
-  const touchTargetStyle = {
-    minHeight: '44px',
-    minWidth: '44px',
-  };
 
   return (
     <article
@@ -56,19 +42,6 @@ export default function CommitteeMemberCard({ member, apiBaseUrl = API_BASE_URL 
       </div>
 
       <p className="committee-card__summary">{responsibilitySummary}</p>
-
-      {hasEmail && (
-        <div className="committee-card__actions">
-          <a
-            href={contactHref}
-            className="committee-card__action-btn"
-            style={touchTargetStyle}
-            aria-label={`للتواصل مع ${fullName}`}
-          >
-            للتواصل
-          </a>
-        </div>
-      )}
     </article>
   );
 }

@@ -1,6 +1,12 @@
 import React from 'react';
-import { extractPostMedia, sanitizeImageUrl } from '../utils/mediaEmbeds.js';
+import {
+  ALLOWED_EXTERNAL_MEDIA_TYPES,
+  MEDIA_TYPE_LABELS,
+  extractPostMedia,
+  sanitizeImageUrl,
+} from '../utils/mediaEmbeds.js';
 import LazyMediaImage from './LazyMediaImage.jsx';
+import PostMediaGallery from './PostMediaGallery.jsx';
 import ShareActions from './ShareActions.jsx';
 
 export const CATEGORY_LABELS = {
@@ -27,7 +33,10 @@ export function formatArabicDate(isoDateString) {
   }
 }
 
-export default function AnnouncementCard({ post, onSelectPost, shareBaseUrl }) {
+export default function AnnouncementCard({
+  post,
+  shareBaseUrl,
+}) {
   if (!post) return null;
 
   const title = (post.title ?? '').trim();
@@ -37,6 +46,8 @@ export default function AnnouncementCard({ post, onSelectPost, shareBaseUrl }) {
     post.description ??
     ''
   ).trim();
+  const fullBody = (post.content ?? post.body ?? post.details ?? '').trim();
+  const extraBody = fullBody && fullBody !== summary ? fullBody : '';
   const category = (post.category ?? 'general').trim();
   const categoryLabel = CATEGORY_LABELS[category] ?? CATEGORY_LABELS.general;
   const publishedAt =
@@ -46,17 +57,12 @@ export default function AnnouncementCard({ post, onSelectPost, shareBaseUrl }) {
   const safeImageUrl = sanitizeImageUrl(rawImageUrl);
 
   const { embeds } = extractPostMedia(post);
-  const hasVideoEmbed = embeds.some((embed) => embed.mediaType === 'video');
-  const hasAudioEmbed = embeds.some((embed) => embed.mediaType === 'audio');
-  const hasDetailAction = typeof onSelectPost === 'function';
+  const presentMediaTypes = ALLOWED_EXTERNAL_MEDIA_TYPES.filter((type) =>
+    embeds.some((embed) => embed.mediaType === type)
+  );
 
   const formattedPublishedDate = formatArabicDate(publishedAt);
   const formattedEventDate = formatArabicDate(eventDate);
-
-  const touchTargetStyle = {
-    minHeight: '44px',
-    minWidth: '44px',
-  };
 
   const postDomId =
     post.id !== null &&
@@ -111,19 +117,27 @@ export default function AnnouncementCard({ post, onSelectPost, shareBaseUrl }) {
           </div>
         )}
 
+        {(extraBody || embeds.length > 0 || (post.images ?? post.gallery)?.length > 0) && (
+          <div className="announcement-card__details">
+            {extraBody && <p className="post-detail__content">{extraBody}</p>}
+            <PostMediaGallery
+              post={post}
+              excludeImageUrls={safeImageUrl ? [safeImageUrl] : []}
+            />
+          </div>
+        )}
+
         <div className="announcement-card__footer">
-          {(hasVideoEmbed || hasAudioEmbed) && (
+          {presentMediaTypes.length > 0 && (
             <div className="announcement-card__media-badges">
-              {hasVideoEmbed && (
-                <span className="announcement-card__media-pill announcement-card__media-pill--video">
-                  فيديو
+              {presentMediaTypes.map((type) => (
+                <span
+                  key={type}
+                  className={`announcement-card__media-pill announcement-card__media-pill--${type}`}
+                >
+                  {MEDIA_TYPE_LABELS[type]}
                 </span>
-              )}
-              {hasAudioEmbed && (
-                <span className="announcement-card__media-pill announcement-card__media-pill--audio">
-                  صوت
-                </span>
-              )}
+              ))}
             </div>
           )}
 
@@ -134,17 +148,6 @@ export default function AnnouncementCard({ post, onSelectPost, shareBaseUrl }) {
               baseUrl={shareBaseUrl}
               menuAlign="end"
             />
-
-            {hasDetailAction && (
-              <button
-                type="button"
-                className="announcement-card__detail-btn"
-                style={touchTargetStyle}
-                onClick={() => onSelectPost(post)}
-              >
-                عرض التفاصيل
-              </button>
-            )}
           </div>
         </div>
       </div>

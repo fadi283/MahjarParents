@@ -82,6 +82,9 @@ class CMSStore:
             with self._data_file.open("r", encoding="utf-8") as fh:
                 loaded = json.load(fh)
             committee = loaded.get("committee", [])
+            if not any("isDirectContact" in m for m in committee):
+                for m in committee:
+                    m["isDirectContact"] = m.get("fullName") == "طه علي اغباريه"
             posts = loaded.get("posts", [])
             media_links = loaded.get("media_links", [])
             forms = loaded.get("forms", [])
@@ -249,6 +252,13 @@ class CMSStore:
         with self._lock:
             entry = copy.deepcopy(record)
             entry.pop("mediaLinks", None)
+            if entry.get("displayOrder") is None and any(
+                p.get("displayOrder") is not None for p in self._data["posts"]
+            ):
+                for existing_post in self._data["posts"]:
+                    if existing_post.get("displayOrder") is not None:
+                        existing_post["displayOrder"] = int(existing_post["displayOrder"]) + 1
+                entry["displayOrder"] = 1
             post_id = self._allocate_id("posts")
             entry["id"] = post_id
             self._data["posts"].append(entry)
@@ -290,6 +300,23 @@ class CMSStore:
             ]
             self._persist()
             return True
+
+    def reorder_posts(self, ordered_ids: list[int]) -> list[dict[str, Any]] | None:
+        with self._lock:
+            by_id = {int(post["id"]): post for post in self._data["posts"]}
+            for pid in ordered_ids:
+                if int(pid) not in by_id:
+                    return None
+            seen_ids = {int(pid) for pid in ordered_ids}
+            ordered_posts = [by_id[int(pid)] for pid in ordered_ids] + [
+                post
+                for post in self._data["posts"]
+                if int(post["id"]) not in seen_ids
+            ]
+            for order_idx, post in enumerate(ordered_posts, start=1):
+                post["displayOrder"] = order_idx
+            self._persist()
+            return [self._hydrate_post(post) for post in ordered_posts]
 
     # --- Media Links CRUD ---
 
@@ -477,7 +504,8 @@ class SQLiteCMSStore:
                         email TEXT NOT NULL DEFAULT '',
                         phone TEXT NOT NULL DEFAULT '',
                         avatar_url TEXT NOT NULL DEFAULT '',
-                        display_order INTEGER
+                        display_order INTEGER,
+                        is_direct_contact INTEGER NOT NULL DEFAULT 0
                     );
                     CREATE TABLE IF NOT EXISTS posts (
                         id INTEGER PRIMARY KEY,
@@ -486,7 +514,8 @@ class SQLiteCMSStore:
                         category TEXT NOT NULL,
                         published_at TEXT NOT NULL DEFAULT '',
                         event_date TEXT NOT NULL DEFAULT '',
-                        image_url TEXT NOT NULL DEFAULT ''
+                        image_url TEXT NOT NULL DEFAULT '',
+                        display_order INTEGER NULL
                     );
                     CREATE TABLE IF NOT EXISTS media_links (
                         id INTEGER PRIMARY KEY,
@@ -496,6 +525,9 @@ class SQLiteCMSStore:
                         canonical_url TEXT NOT NULL,
                         embed_url TEXT NOT NULL,
                         original_url TEXT NOT NULL DEFAULT '',
+                        render_mode TEXT NOT NULL DEFAULT 'iframe',
+                        aspect_width INTEGER NULL,
+                        aspect_height INTEGER NULL,
                         hosted_externally INTEGER NOT NULL DEFAULT 1,
                         title TEXT NOT NULL DEFAULT ''
                     );
@@ -515,6 +547,47 @@ class SQLiteCMSStore:
                     );
                     """
                 )
+                committee_cols = {
+                    r["name"]
+                    for r in self._conn.execute("PRAGMA table_info(committee)")
+                }
+                if "is_direct_contact" not in committee_cols:
+                    self._conn.execute(
+                        "ALTER TABLE committee ADD COLUMN "
+                        "is_direct_contact INTEGER NOT NULL DEFAULT 0"
+                    )
+                    self._conn.execute(
+                        "UPDATE committee SET is_direct_contact = 1 "
+                        "WHERE full_name = ?",
+                        ("طه علي اغباريه",),
+                    )
+                media_cols = {
+                    r["name"]
+                    for r in self._conn.execute("PRAGMA table_info(media_links)")
+                }
+                if "render_mode" not in media_cols:
+                    self._conn.execute(
+                        "ALTER TABLE media_links ADD COLUMN "
+                        "render_mode TEXT NOT NULL DEFAULT 'iframe'"
+                    )
+                if "aspect_width" not in media_cols:
+                    self._conn.execute(
+                        "ALTER TABLE media_links ADD COLUMN "
+                        "aspect_width INTEGER NULL"
+                    )
+                if "aspect_height" not in media_cols:
+                    self._conn.execute(
+                        "ALTER TABLE media_links ADD COLUMN "
+                        "aspect_height INTEGER NULL"
+                    )
+                post_cols = {
+                    r["name"]
+                    for r in self._conn.execute("PRAGMA table_info(posts)")
+                }
+                if "display_order" not in post_cols:
+                    self._conn.execute(
+                        "ALTER TABLE posts ADD COLUMN display_order INTEGER NULL"
+                    )
                 row = self._conn.execute(
                     "SELECT value FROM metadata WHERE key = 'seeded'"
                 ).fetchone()
@@ -542,8 +615,8 @@ class SQLiteCMSStore:
                 """
                 INSERT INTO committee (
                     id, full_name, role, responsibility_summary,
-                    email, phone, avatar_url, display_order
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    email, phone, avatar_url, display_order, is_direct_contact
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(member["id"]),
@@ -554,6 +627,7 @@ class SQLiteCMSStore:
                     member.get("phone", ""),
                     member.get("avatarUrl", ""),
                     member.get("displayOrder"),
+                    1 if member.get("isDirectContact") else 0,
                 ),
             )
 
@@ -562,8 +636,8 @@ class SQLiteCMSStore:
             self._conn.execute(
                 """
                 INSERT INTO posts (
-                    id, title, summary, category, published_at, event_date, image_url
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    id, title, summary, category, published_at, event_date, image_url, display_order
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(post["id"]),
@@ -573,6 +647,7 @@ class SQLiteCMSStore:
                     post.get("publishedAt", ""),
                     post.get("eventDate", ""),
                     post.get("imageUrl", ""),
+                    post.get("displayOrder"),
                 ),
             )
 
@@ -582,8 +657,9 @@ class SQLiteCMSStore:
                 """
                 INSERT INTO media_links (
                     id, post_id, media_type, provider, canonical_url,
-                    embed_url, original_url, hosted_externally, title
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    embed_url, original_url, render_mode, aspect_width, aspect_height,
+                    hosted_externally, title
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     int(link["id"]),
@@ -593,6 +669,9 @@ class SQLiteCMSStore:
                     link.get("canonicalUrl", ""),
                     link.get("embedUrl", ""),
                     link.get("originalUrl", ""),
+                    link.get("renderMode", "iframe"),
+                    link.get("aspectWidth"),
+                    link.get("aspectHeight"),
                     1 if link.get("hostedExternally", True) else 0,
                     link.get("title", ""),
                 ),
@@ -669,11 +748,12 @@ class SQLiteCMSStore:
             "phone": row["phone"],
             "avatarUrl": row["avatar_url"],
             "displayOrder": row["display_order"],
+            "isDirectContact": bool(row["is_direct_contact"]),
         }
 
     @staticmethod
     def _row_to_media_link(row: sqlite3.Row) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "id": row["id"],
             "postId": row["post_id"],
             "mediaType": row["media_type"],
@@ -681,9 +761,15 @@ class SQLiteCMSStore:
             "canonicalUrl": row["canonical_url"],
             "embedUrl": row["embed_url"],
             "originalUrl": row["original_url"],
+            "renderMode": row["render_mode"],
             "hostedExternally": bool(row["hosted_externally"]),
             "title": row["title"],
         }
+        if row["aspect_width"] is not None:
+            result["aspectWidth"] = row["aspect_width"]
+        if row["aspect_height"] is not None:
+            result["aspectHeight"] = row["aspect_height"]
+        return result
 
     @staticmethod
     def _row_to_post(
@@ -697,6 +783,7 @@ class SQLiteCMSStore:
             "publishedAt": row["published_at"],
             "eventDate": row["event_date"],
             "imageUrl": row["image_url"],
+            "displayOrder": row["display_order"],
             "mediaLinks": media_links,
         }
 
@@ -725,8 +812,9 @@ class SQLiteCMSStore:
                 """
                 INSERT INTO media_links (
                     id, post_id, media_type, provider, canonical_url,
-                    embed_url, original_url, hosted_externally, title
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    embed_url, original_url, render_mode, aspect_width, aspect_height,
+                    hosted_externally, title
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     link_id,
@@ -736,6 +824,9 @@ class SQLiteCMSStore:
                     link.get("canonicalUrl", ""),
                     link.get("embedUrl", ""),
                     link.get("originalUrl", ""),
+                    link.get("renderMode", "iframe"),
+                    link.get("aspectWidth"),
+                    link.get("aspectHeight"),
                     1 if link.get("hostedExternally", True) else 0,
                     link.get("title", ""),
                 ),
@@ -773,8 +864,8 @@ class SQLiteCMSStore:
                     """
                     INSERT INTO committee (
                         id, full_name, role, responsibility_summary,
-                        email, phone, avatar_url, display_order
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        email, phone, avatar_url, display_order, is_direct_contact
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         member_id,
@@ -785,6 +876,7 @@ class SQLiteCMSStore:
                         record.get("phone", ""),
                         record.get("avatarUrl", ""),
                         record.get("displayOrder"),
+                        1 if record.get("isDirectContact") else 0,
                     ),
                 )
             return self.get_committee_member(member_id)  # type: ignore[return-value]
@@ -802,7 +894,8 @@ class SQLiteCMSStore:
                     """
                     UPDATE committee
                     SET full_name = ?, role = ?, responsibility_summary = ?,
-                        email = ?, phone = ?, avatar_url = ?, display_order = ?
+                        email = ?, phone = ?, avatar_url = ?, display_order = ?,
+                        is_direct_contact = ?
                     WHERE id = ?
                     """,
                     (
@@ -813,6 +906,7 @@ class SQLiteCMSStore:
                         merged.get("phone", ""),
                         merged.get("avatarUrl", ""),
                         merged.get("displayOrder"),
+                        1 if merged.get("isDirectContact") else 0,
                         member_id,
                     ),
                 )
@@ -861,12 +955,22 @@ class SQLiteCMSStore:
     ) -> dict[str, Any]:
         with self._lock:
             with self._conn:
+                display_order = record.get("displayOrder")
+                if display_order is None:
+                    has_ordered = self._conn.execute(
+                        "SELECT 1 FROM posts WHERE display_order IS NOT NULL LIMIT 1"
+                    ).fetchone()
+                    if has_ordered is not None:
+                        self._conn.execute(
+                            "UPDATE posts SET display_order = display_order + 1 WHERE display_order IS NOT NULL"
+                        )
+                        display_order = 1
                 post_id = self._allocate_id("posts")
                 self._conn.execute(
                     """
                     INSERT INTO posts (
-                        id, title, summary, category, published_at, event_date, image_url
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        id, title, summary, category, published_at, event_date, image_url, display_order
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         post_id,
@@ -876,6 +980,7 @@ class SQLiteCMSStore:
                         record.get("publishedAt", ""),
                         record.get("eventDate", ""),
                         record.get("imageUrl", ""),
+                        display_order,
                     ),
                 )
                 if media_links:
@@ -900,7 +1005,7 @@ class SQLiteCMSStore:
                     """
                     UPDATE posts
                     SET title = ?, summary = ?, category = ?,
-                        published_at = ?, event_date = ?, image_url = ?
+                        published_at = ?, event_date = ?, image_url = ?, display_order = ?
                     WHERE id = ?
                     """,
                     (
@@ -910,6 +1015,7 @@ class SQLiteCMSStore:
                         merged.get("publishedAt", ""),
                         merged.get("eventDate", ""),
                         merged.get("imageUrl", ""),
+                        merged.get("displayOrder"),
                         post_id,
                     ),
                 )
@@ -922,6 +1028,29 @@ class SQLiteCMSStore:
             with self._conn:
                 cur = self._conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
                 return cur.rowcount > 0
+
+    def reorder_posts(self, ordered_ids: list[int]) -> list[dict[str, Any]] | None:
+        with self._lock:
+            existing_rows = self._conn.execute(
+                "SELECT id FROM posts ORDER BY id ASC"
+            ).fetchall()
+            existing_ids = [int(row["id"]) for row in existing_rows]
+            existing_set = set(existing_ids)
+            for pid in ordered_ids:
+                if int(pid) not in existing_set:
+                    return None
+            normalized_ids = [int(pid) for pid in ordered_ids]
+            seen = set(normalized_ids)
+            full_ids = normalized_ids + [
+                pid for pid in existing_ids if pid not in seen
+            ]
+            with self._conn:
+                for order_idx, pid in enumerate(full_ids, start=1):
+                    self._conn.execute(
+                        "UPDATE posts SET display_order = ? WHERE id = ?",
+                        (order_idx, pid),
+                    )
+            return self.list_posts()
 
     # --- Media Links CRUD ---
 
@@ -953,8 +1082,9 @@ class SQLiteCMSStore:
                     """
                     INSERT INTO media_links (
                         id, post_id, media_type, provider, canonical_url,
-                        embed_url, original_url, hosted_externally, title
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        embed_url, original_url, render_mode, aspect_width, aspect_height,
+                        hosted_externally, title
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         link_id,
@@ -964,6 +1094,9 @@ class SQLiteCMSStore:
                         record.get("canonicalUrl", ""),
                         record.get("embedUrl", ""),
                         record.get("originalUrl", ""),
+                        record.get("renderMode", "iframe"),
+                        record.get("aspectWidth"),
+                        record.get("aspectHeight"),
                         1 if record.get("hostedExternally", True) else 0,
                         record.get("title", ""),
                     ),
@@ -983,7 +1116,9 @@ class SQLiteCMSStore:
                     """
                     UPDATE media_links
                     SET post_id = ?, media_type = ?, provider = ?, canonical_url = ?,
-                        embed_url = ?, original_url = ?, hosted_externally = ?, title = ?
+                        embed_url = ?, original_url = ?, render_mode = ?,
+                        aspect_width = ?, aspect_height = ?,
+                        hosted_externally = ?, title = ?
                     WHERE id = ?
                     """,
                     (
@@ -993,6 +1128,9 @@ class SQLiteCMSStore:
                         merged.get("canonicalUrl", ""),
                         merged.get("embedUrl", ""),
                         merged.get("originalUrl", ""),
+                        merged.get("renderMode", "iframe"),
+                        merged.get("aspectWidth"),
+                        merged.get("aspectHeight"),
                         1 if merged.get("hostedExternally", True) else 0,
                         merged.get("title", ""),
                         link_id,

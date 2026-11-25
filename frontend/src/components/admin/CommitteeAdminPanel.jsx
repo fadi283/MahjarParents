@@ -10,6 +10,7 @@ function buildCommitteeFormState(item = null) {
       item?.responsibilitySummary ?? item?.responsibility_summary ?? '',
     email: item?.email ?? item?.contactUrl ?? item?.contact_url ?? '',
     phone: item?.phone ?? '',
+    isDirectContact: Boolean(item?.isDirectContact ?? item?.is_direct_contact),
     avatarUrl: item?.avatarUrl ?? item?.avatar_url ?? '',
     displayOrder:
       item?.displayOrder !== null && item?.displayOrder !== undefined
@@ -249,6 +250,19 @@ export default function CommitteeAdminPanel({
           </div>
 
           <div className="admin-field">
+            <label htmlFor="committee-direct-contact" className="admin-field__label">
+              <input
+                id="committee-direct-contact"
+                type="checkbox"
+                checked={formState.isDirectContact}
+                onChange={(e) => handleFieldChange('isDirectContact', e.target.checked)}
+                disabled={isBusy}
+              />{' '}
+              جهة اتصال مباشرة (تظهر في صفحة التواصل مع أزرار الاتصال والواتساب والبريد)
+            </label>
+          </div>
+
+          <div className="admin-field">
             <label htmlFor="committee-summary" className="admin-field__label">
               نبذة عن المهام والمسؤوليات
             </label>
@@ -308,6 +322,9 @@ export default function CommitteeAdminPanel({
                     <div className="admin-item__top">
                       <strong className="admin-item__title">{name}</strong>
                       <span className="admin-badge">{role}</span>
+                      {(member.isDirectContact ?? member.is_direct_contact) && (
+                        <span className="admin-badge">جهة اتصال مباشرة</span>
+                      )}
                     </div>
                     {summary && <p className="admin-item__desc">{summary}</p>}
                     <div className="admin-item__meta">

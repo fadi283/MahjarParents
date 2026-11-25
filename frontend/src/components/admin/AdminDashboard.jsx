@@ -2,23 +2,19 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { adminApi, translateAdminError } from '../../utils/adminApi.js';
 import {
   removeById,
-  syncMediaLinksIntoPosts,
   upsertCommitteeList,
   upsertFormList,
-  upsertMediaLinkList,
   upsertPostList,
 } from '../../utils/adminState.js';
 import AdminLoginForm from './AdminLoginForm.jsx';
 import CommitteeAdminPanel from './CommitteeAdminPanel.jsx';
 import PostsAdminPanel from './PostsAdminPanel.jsx';
-import MediaLinksAdminPanel from './MediaLinksAdminPanel.jsx';
 import FormsAdminPanel from './FormsAdminPanel.jsx';
 import { TOUCH_TARGET_STYLE } from './adminShared.jsx';
 
 export const ADMIN_SECTIONS = [
   { id: 'committee', label: 'أعضاء اللجنة' },
   { id: 'posts', label: 'الإعلانات والفعاليات' },
-  { id: 'media', label: 'روابط الوسائط' },
   { id: 'forms', label: 'نماذج Google Forms' },
 ];
 
@@ -40,10 +36,14 @@ export default function AdminDashboard({
         apiClient.getStoredToken?.()
     )
   );
-  const [activeSection, setActiveSection] = useState(initialSection);
+  const [activeSection, setActiveSection] = useState(() => {
+    if (ADMIN_SECTIONS.some((section) => section.id === initialSection)) {
+      return initialSection;
+    }
+    return initialSection === 'media' ? 'posts' : 'committee';
+  });
   const [committee, setCommittee] = useState(() => initialData?.committee ?? []);
   const [posts, setPosts] = useState(() => initialData?.posts ?? []);
-  const [mediaLinks, setMediaLinks] = useState(() => initialData?.mediaLinks ?? []);
   const [forms, setForms] = useState(() => initialData?.forms ?? []);
   const [isBusy, setIsBusy] = useState(false);
   const [errorMessage, setErrorMessage] = useState(initialError);
@@ -75,28 +75,21 @@ export default function AdminDashboard({
   );
 
   const loadAllAdminData = useCallback(async () => {
-    const [committeeRes, postsRes, mediaRes, formsRes] = await Promise.all([
+    const [committeeRes, postsRes, formsRes] = await Promise.all([
       apiClient.listCommittee(),
       apiClient.listPosts(),
-      apiClient.listMediaLinks(),
       apiClient.listForms(),
     ]);
     const nextCommittee = Array.isArray(committeeRes) ? committeeRes : [];
-    const nextMedia = Array.isArray(mediaRes) ? mediaRes : [];
-    const nextPosts = syncMediaLinksIntoPosts(
-      Array.isArray(postsRes) ? postsRes : [],
-      nextMedia
-    );
+    const nextPosts = Array.isArray(postsRes) ? postsRes : [];
     const nextForms = Array.isArray(formsRes) ? formsRes : [];
 
     setCommittee(nextCommittee);
     setPosts(nextPosts);
-    setMediaLinks(nextMedia);
     setForms(nextForms);
     notifyParent({
       committee: nextCommittee,
       posts: nextPosts,
-      mediaLinks: nextMedia,
       forms: nextForms,
     });
   }, [apiClient, notifyParent]);
@@ -224,7 +217,6 @@ export default function AdminDashboard({
   const sectionCounts = {
     committee: committee.length,
     posts: posts.length,
-    media: mediaLinks.length,
     forms: forms.length,
   };
 
@@ -325,7 +317,7 @@ export default function AdminDashboard({
                 const created = await apiClient.createCommitteeMember(payload);
                 const nextCommittee = upsertCommitteeList(committee, created);
                 setCommittee(nextCommittee);
-                notifyParent({ committee: nextCommittee, posts, mediaLinks, forms });
+                notifyParent({ committee: nextCommittee, posts, forms });
               }, 'تمت إضافة عضو اللجنة بنجاح.')
             }
             onUpdate={(id, payload) =>
@@ -333,7 +325,7 @@ export default function AdminDashboard({
                 const updated = await apiClient.updateCommitteeMember(id, payload);
                 const nextCommittee = upsertCommitteeList(committee, updated);
                 setCommittee(nextCommittee);
-                notifyParent({ committee: nextCommittee, posts, mediaLinks, forms });
+                notifyParent({ committee: nextCommittee, posts, forms });
               }, 'تم تحديث بيانات عضو اللجنة بنجاح.')
             }
             onDelete={(id) =>
@@ -341,7 +333,7 @@ export default function AdminDashboard({
                 await apiClient.deleteCommitteeMember(id);
                 const nextCommittee = removeById(committee, id);
                 setCommittee(nextCommittee);
-                notifyParent({ committee: nextCommittee, posts, mediaLinks, forms });
+                notifyParent({ committee: nextCommittee, posts, forms });
               }, 'تم حذف عضو اللجنة بنجاح.')
             }
           />
@@ -356,95 +348,34 @@ export default function AdminDashboard({
             onCreate={(payload) =>
               runMutation(async () => {
                 const created = await apiClient.createPost(payload);
-                const nextPosts = syncMediaLinksIntoPosts(
-                  upsertPostList(posts, created),
-                  mediaLinks
-                );
+                const nextPosts = upsertPostList(posts, created);
                 setPosts(nextPosts);
-                notifyParent({ committee, posts: nextPosts, mediaLinks, forms });
+                notifyParent({ committee, posts: nextPosts, forms });
               }, 'تم نشر الإعلان بنجاح.')
             }
             onUpdate={(id, payload) =>
               runMutation(async () => {
                 const updated = await apiClient.updatePost(id, payload);
-                const nextPosts = syncMediaLinksIntoPosts(
-                  upsertPostList(posts, updated),
-                  mediaLinks
-                );
+                const nextPosts = upsertPostList(posts, updated);
                 setPosts(nextPosts);
-                notifyParent({ committee, posts: nextPosts, mediaLinks, forms });
+                notifyParent({ committee, posts: nextPosts, forms });
               }, 'تم تحديث الإعلان بنجاح.')
             }
             onDelete={(id) =>
               runMutation(async () => {
                 await apiClient.deletePost(id);
-                const nextMedia = mediaLinks.filter(
-                  (link) => String(link.postId) !== String(id)
-                );
                 const nextPosts = removeById(posts, id);
-                setMediaLinks(nextMedia);
                 setPosts(nextPosts);
-                notifyParent({
-                  committee,
-                  posts: nextPosts,
-                  mediaLinks: nextMedia,
-                  forms,
-                });
+                notifyParent({ committee, posts: nextPosts, forms });
               }, 'تم حذف الإعلان بنجاح.')
             }
-          />
-        )}
-
-        {activeSection === 'media' && (
-          <MediaLinksAdminPanel
-            mediaLinks={mediaLinks}
-            posts={posts}
-            isBusy={isBusy}
-            initialEditingItem={initialEditingItem}
-            onCreate={(payload) =>
+            onReorder={(orderedIds) =>
               runMutation(async () => {
-                const created = await apiClient.createMediaLink(payload);
-                const nextMedia = upsertMediaLinkList(mediaLinks, created);
-                const nextPosts = syncMediaLinksIntoPosts(posts, nextMedia);
-                setMediaLinks(nextMedia);
+                const reordered = await apiClient.reorderPosts(orderedIds);
+                const nextPosts = Array.isArray(reordered) ? reordered : posts;
                 setPosts(nextPosts);
-                notifyParent({
-                  committee,
-                  posts: nextPosts,
-                  mediaLinks: nextMedia,
-                  forms,
-                });
-              }, 'تمت إضافة رابط الوسائط بنجاح.')
-            }
-            onUpdate={(id, payload) =>
-              runMutation(async () => {
-                const updated = await apiClient.updateMediaLink(id, payload);
-                const nextMedia = upsertMediaLinkList(mediaLinks, updated);
-                const nextPosts = syncMediaLinksIntoPosts(posts, nextMedia);
-                setMediaLinks(nextMedia);
-                setPosts(nextPosts);
-                notifyParent({
-                  committee,
-                  posts: nextPosts,
-                  mediaLinks: nextMedia,
-                  forms,
-                });
-              }, 'تم تحديث رابط الوسائط بنجاح.')
-            }
-            onDelete={(id) =>
-              runMutation(async () => {
-                await apiClient.deleteMediaLink(id);
-                const nextMedia = removeById(mediaLinks, id);
-                const nextPosts = syncMediaLinksIntoPosts(posts, nextMedia);
-                setMediaLinks(nextMedia);
-                setPosts(nextPosts);
-                notifyParent({
-                  committee,
-                  posts: nextPosts,
-                  mediaLinks: nextMedia,
-                  forms,
-                });
-              }, 'تم حذف رابط الوسائط بنجاح.')
+                notifyParent({ committee, posts: nextPosts, forms });
+              }, 'تم تحديث ترتيب الإعلانات بنجاح.')
             }
           />
         )}
@@ -459,7 +390,7 @@ export default function AdminDashboard({
                 const created = await apiClient.createForm(payload);
                 const nextForms = upsertFormList(forms, created);
                 setForms(nextForms);
-                notifyParent({ committee, posts, mediaLinks, forms: nextForms });
+                notifyParent({ committee, posts, forms: nextForms });
               }, 'تمت إضافة نموذج Google Forms بنجاح.')
             }
             onUpdate={(id, payload) =>
@@ -467,7 +398,7 @@ export default function AdminDashboard({
                 const updated = await apiClient.updateForm(id, payload);
                 const nextForms = upsertFormList(forms, updated);
                 setForms(nextForms);
-                notifyParent({ committee, posts, mediaLinks, forms: nextForms });
+                notifyParent({ committee, posts, forms: nextForms });
               }, 'تم تحديث نموذج Google Forms بنجاح.')
             }
             onDelete={(id) =>
@@ -475,7 +406,7 @@ export default function AdminDashboard({
                 await apiClient.deleteForm(id);
                 const nextForms = removeById(forms, id);
                 setForms(nextForms);
-                notifyParent({ committee, posts, mediaLinks, forms: nextForms });
+                notifyParent({ committee, posts, forms: nextForms });
               }, 'تم حذف نموذج Google Forms بنجاح.')
             }
           />

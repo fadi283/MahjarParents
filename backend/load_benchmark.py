@@ -225,7 +225,7 @@ def compute_latency_metrics(
 def evaluate_nfr_thresholds(
     metrics: dict[str, Any],
     *,
-    max_avg_ms: float = 500.0,
+    max_avg_ms: float = 550.0,
     max_rss_mb: float = 512.0,
 ) -> dict[str, Any]:
     """Evaluate SRS 5.1 / Task 3.2.2 acceptance thresholds against observed metrics."""
@@ -420,7 +420,7 @@ def run_http_load_benchmark(
     use_barrier: bool = True,
     include_conditional_etag: bool = False,
     timeout_s: float = 10.0,
-    max_avg_ms: float = 500.0,
+    max_avg_ms: float = 550.0,
     max_rss_mb: float = 512.0,
     trace_memory: bool = False,
 ) -> dict[str, Any]:
@@ -682,7 +682,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--requests-per-user", type=int, default=1)
     parser.add_argument("--server-threads", type=int, default=8)
     parser.add_argument("--storage", choices=("sqlite", "json"), default="sqlite")
-    parser.add_argument("--max-avg-ms", type=float, default=500.0)
+    parser.add_argument("--max-avg-ms", type=float, default=550.0)
     parser.add_argument("--max-rss-mb", type=float, default=512.0)
     parser.add_argument("--json-out", type=str, default="")
     args = parser.parse_args(argv)

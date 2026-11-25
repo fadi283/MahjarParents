@@ -18,8 +18,26 @@ export function upsertCommitteeList(list = [], member) {
   });
 }
 
+function parseDisplayOrder(item) {
+  const raw = item?.displayOrder ?? item?.display_order;
+  if (raw === null || raw === undefined || raw === '' || typeof raw === 'boolean') {
+    return null;
+  }
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : null;
+}
+
 export function upsertPostList(list = [], post) {
   return upsertItem(list, post).sort((a, b) => {
+    const orderA = parseDisplayOrder(a);
+    const orderB = parseDisplayOrder(b);
+    if (orderA !== null || orderB !== null) {
+      if (orderA === null) return 1;
+      if (orderB === null) return -1;
+      if (orderA !== orderB) {
+        return orderA - orderB;
+      }
+    }
     const rawA = a?.publishedAt ?? a?.published_at ?? '';
     const rawB = b?.publishedAt ?? b?.published_at ?? '';
     const timeA = rawA ? new Date(rawA).getTime() : 0;
@@ -31,6 +49,74 @@ export function upsertPostList(list = [], post) {
     }
     return (Number(b?.id) || 0) - (Number(a?.id) || 0);
   });
+}
+
+export function movePostInList(list = [], postId, direction) {
+  if (!Array.isArray(list) || list.length === 0) {
+    return { moved: false, nextPosts: [], orderedIds: [] };
+  }
+  const index = list.findIndex((item) => String(item.id) === String(postId));
+  if (index === -1) {
+    return {
+      moved: false,
+      nextPosts: [...list],
+      orderedIds: list.map((item) => item.id),
+    };
+  }
+  const targetIndex =
+    direction === 'up' ? index - 1 : direction === 'down' ? index + 1 : -1;
+  if (targetIndex < 0 || targetIndex >= list.length) {
+    return {
+      moved: false,
+      nextPosts: [...list],
+      orderedIds: list.map((item) => item.id),
+    };
+  }
+  const swapped = [...list];
+  [swapped[index], swapped[targetIndex]] = [swapped[targetIndex], swapped[index]];
+  const nextPosts = swapped.map((item, idx) => ({
+    ...item,
+    displayOrder: idx + 1,
+    display_order: idx + 1,
+  }));
+  return {
+    moved: true,
+    nextPosts,
+    orderedIds: nextPosts.map((item) => item.id),
+  };
+}
+
+export function reorderPostsByDrag(list = [], draggedId, targetId) {
+  if (!Array.isArray(list) || list.length < 2) {
+    const safeList = Array.isArray(list) ? [...list] : [];
+    return {
+      moved: false,
+      nextPosts: safeList,
+      orderedIds: safeList.map((item) => item.id),
+    };
+  }
+  const fromIndex = list.findIndex((item) => String(item.id) === String(draggedId));
+  const toIndex = list.findIndex((item) => String(item.id) === String(targetId));
+  if (fromIndex === -1 || toIndex === -1 || fromIndex === toIndex) {
+    return {
+      moved: false,
+      nextPosts: [...list],
+      orderedIds: list.map((item) => item.id),
+    };
+  }
+  const reordered = [...list];
+  const [movedItem] = reordered.splice(fromIndex, 1);
+  reordered.splice(toIndex, 0, movedItem);
+  const nextPosts = reordered.map((item, idx) => ({
+    ...item,
+    displayOrder: idx + 1,
+    display_order: idx + 1,
+  }));
+  return {
+    moved: true,
+    nextPosts,
+    orderedIds: nextPosts.map((item) => item.id),
+  };
 }
 
 export function upsertMediaLinkList(list = [], mediaLink) {

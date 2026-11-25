@@ -1,7 +1,5 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import AnnouncementCard, { CATEGORY_LABELS } from './AnnouncementCard.jsx';
-import PostDetailView from './PostDetailView.jsx';
-import { parsePostIdFromLocation } from '../utils/whatsappShare.js';
 
 export const POST_CATEGORIES = [
   { id: 'all', label: 'الكل' },
@@ -10,6 +8,15 @@ export const POST_CATEGORIES = [
   { id: 'student_activity', label: CATEGORY_LABELS.student_activity },
   { id: 'updates', label: CATEGORY_LABELS.updates },
 ];
+
+function parsePostDisplayOrder(post) {
+  const raw = post?.displayOrder ?? post?.display_order;
+  if (raw === null || raw === undefined || raw === '' || typeof raw === 'boolean') {
+    return null;
+  }
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 1 ? parsed : null;
+}
 
 export function sortAndFilterPosts(posts = [], selectedCategory = 'all') {
   if (!Array.isArray(posts)) return [];
@@ -22,6 +29,16 @@ export function sortAndFilterPosts(posts = [], selectedCategory = 'all') {
       : posts.filter((post) => (post?.category ?? 'general') === normalizedCategory);
 
   return filtered.sort((a, b) => {
+    const orderA = parsePostDisplayOrder(a);
+    const orderB = parsePostDisplayOrder(b);
+    if (orderA !== null || orderB !== null) {
+      if (orderA === null) return 1;
+      if (orderB === null) return -1;
+      if (orderA !== orderB) {
+        return orderA - orderB;
+      }
+    }
+
     const rawDateA =
       a?.publishedAt ?? a?.published_at ?? a?.createdAt ?? a?.created_at ?? '';
     const rawDateB =
@@ -43,91 +60,9 @@ export function sortAndFilterPosts(posts = [], selectedCategory = 'all') {
 
 export default function AnnouncementsFeed({
   posts = [],
-  initialCategory = 'all',
-  initialSelectedPostId = null,
   shareBaseUrl,
-  onCategoryChange,
-  onSelectPost,
 }) {
-  const [activeCategory, setActiveCategory] = useState(initialCategory);
-  const [selectedPostId, setSelectedPostId] = useState(
-    () =>
-      initialSelectedPostId ??
-      (typeof window !== 'undefined'
-        ? parsePostIdFromLocation(window.location)
-        : null)
-  );
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || initialSelectedPostId !== null) {
-      return undefined;
-    }
-
-    const syncFromLocation = () => {
-      setSelectedPostId(parsePostIdFromLocation(window.location));
-    };
-
-    window.addEventListener('hashchange', syncFromLocation);
-    window.addEventListener('popstate', syncFromLocation);
-    return () => {
-      window.removeEventListener('hashchange', syncFromLocation);
-      window.removeEventListener('popstate', syncFromLocation);
-    };
-  }, [initialSelectedPostId]);
-
-  const handleSelectCategory = (categoryId) => {
-    setActiveCategory(categoryId);
-    setSelectedPostId(null);
-    if (typeof onCategoryChange === 'function') {
-      onCategoryChange(categoryId);
-    }
-  };
-
-  const handleSelectPost = (post) => {
-    if (!post) return;
-    setSelectedPostId(post.id);
-    if (
-      typeof window !== 'undefined' &&
-      initialSelectedPostId === null &&
-      post.id !== null &&
-      post.id !== undefined
-    ) {
-      const targetHash = `#post-${encodeURIComponent(String(post.id).trim())}`;
-      if (window.location.hash !== targetHash) {
-        window.history.pushState(null, '', targetHash);
-      }
-    }
-    if (typeof onSelectPost === 'function') {
-      onSelectPost(post);
-    }
-  };
-
-  const handleClosePost = () => {
-    setSelectedPostId(null);
-    if (
-      typeof window !== 'undefined' &&
-      initialSelectedPostId === null &&
-      parsePostIdFromLocation(window.location) !== null
-    ) {
-      window.history.replaceState(
-        null,
-        '',
-        `${window.location.pathname || '/'}${window.location.search || ''}`
-      );
-    }
-  };
-
-  const selectedPost =
-    selectedPostId !== null && selectedPostId !== undefined && Array.isArray(posts)
-      ? posts.find((post) => String(post?.id) === String(selectedPostId)) ?? null
-      : null;
-
-  const visiblePosts = sortAndFilterPosts(posts, activeCategory);
-
-  const touchTargetStyle = {
-    minHeight: '44px',
-    minWidth: '44px',
-  };
+  const visiblePosts = sortAndFilterPosts(posts, 'all');
 
   return (
     <section
@@ -148,42 +83,11 @@ export default function AnnouncementsFeed({
             تابع أحدث الإعلانات المدرسية، الفعاليات القادمة، والأنشطة الطلابية والمستجدات مرتبة من الأحدث إلى الأقدم.
           </p>
         </div>
-
-        <div
-          className="announcements-feed__filters"
-          role="toolbar"
-          aria-label="تصفية الإعلانات حسب التصنيف"
-        >
-          {POST_CATEGORIES.map((category) => {
-            const isActive = activeCategory === category.id;
-            return (
-              <button
-                key={category.id}
-                type="button"
-                className={`announcements-feed__filter-btn ${
-                  isActive ? 'announcements-feed__filter-btn--active' : ''
-                }`}
-                style={touchTargetStyle}
-                aria-pressed={isActive ? 'true' : 'false'}
-                data-category={category.id}
-                onClick={() => handleSelectCategory(category.id)}
-              >
-                {category.label}
-              </button>
-            );
-          })}
-        </div>
       </div>
 
-      {selectedPost ? (
-        <PostDetailView
-          post={selectedPost}
-          shareBaseUrl={shareBaseUrl}
-          onClose={handleClosePost}
-        />
-      ) : visiblePosts.length === 0 ? (
+      {visiblePosts.length === 0 ? (
         <div className="announcements-feed__empty" role="status">
-          <p>لا توجد إعلانات أو فعاليات في هذا التصنيف حالياً.</p>
+          <p>لا توجد إعلانات أو فعاليات منشورة حالياً.</p>
         </div>
       ) : (
         <div className="announcements-feed__grid" role="feed" aria-busy="false">
@@ -195,7 +99,6 @@ export default function AnnouncementsFeed({
               <AnnouncementCard
                 post={post}
                 shareBaseUrl={shareBaseUrl}
-                onSelectPost={handleSelectPost}
               />
             </div>
           ))}

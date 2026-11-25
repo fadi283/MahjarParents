@@ -459,6 +459,15 @@ class TestReadinessAndFrontendBundleServing:
             root_csp = root_resp.headers.get("Content-Security-Policy", "")
             assert "https://docs.google.com" in root_csp
             assert "https://www.youtube-nocookie.com" in root_csp
+            assert "https://www.instagram.com" in root_csp
+            assert "https://www.facebook.com" in root_csp
+            assert "https://www.tiktok.com" in root_csp
+            assert "https://open.spotify.com" in root_csp
+            assert "https://www.dailymotion.com" in root_csp
+            assert "https://www.linkedin.com" in root_csp
+            assert "https://t.me" in root_csp
+            assert "https://www.canva.com" in root_csp
+            assert "https://www.threads.net" in root_csp
             assert "https://fonts.googleapis.com" in root_csp
             assert "https://fonts.gstatic.com" in root_csp
             assert "frame-ancestors 'none'" in root_csp

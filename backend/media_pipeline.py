@@ -3,12 +3,17 @@
 from __future__ import annotations
 
 import hashlib
+import html
+import ipaddress
 import os
 from pathlib import Path
 import re
 import tempfile
+import threading
 from typing import Any
-from urllib.parse import parse_qs, quote, urlsplit
+from urllib.parse import parse_qs, quote, unquote, urljoin, urlsplit
+import urllib.error
+import urllib.request
 
 import cv2
 import numpy as np
@@ -55,6 +60,17 @@ _FORMAT_SPEC = {
     "jpeg": {"ext": ".jpg", "mime": "image/jpeg", "default_quality": DEFAULT_JPEG_QUALITY},
 }
 
+ALLOWED_EXTERNAL_MEDIA_TYPES = ("video", "reel", "post", "image", "audio")
+EXTERNAL_IMAGE_EXTENSIONS = frozenset({
+    ".jpg",
+    ".jpeg",
+    ".png",
+    ".webp",
+    ".gif",
+    ".avif",
+    ".bmp",
+})
+
 _YOUTUBE_HOSTS = frozenset({
     "youtube.com",
     "www.youtube.com",
@@ -63,13 +79,63 @@ _YOUTUBE_HOSTS = frozenset({
     "www.youtube-nocookie.com",
 })
 _VIMEO_HOSTS = frozenset({"vimeo.com", "www.vimeo.com", "player.vimeo.com"})
+_DAILYMOTION_HOSTS = frozenset({"dailymotion.com", "www.dailymotion.com", "dai.ly"})
+_INSTAGRAM_HOSTS = frozenset({
+    "instagram.com",
+    "www.instagram.com",
+    "m.instagram.com",
+    "instagr.am",
+    "www.instagr.am",
+})
+_FACEBOOK_PAGE_HOSTS = frozenset({
+    "facebook.com",
+    "www.facebook.com",
+    "m.facebook.com",
+    "web.facebook.com",
+    "fb.com",
+    "www.fb.com",
+})
+_FACEBOOK_HOSTS = frozenset({*_FACEBOOK_PAGE_HOSTS, "fb.watch"})
+_TIKTOK_SHORT_HOSTS = frozenset({"vm.tiktok.com", "vt.tiktok.com"})
+_TIKTOK_HOSTS = frozenset({
+    "tiktok.com",
+    "www.tiktok.com",
+    "m.tiktok.com",
+    *_TIKTOK_SHORT_HOSTS,
+})
+_X_HOSTS = frozenset({
+    "x.com",
+    "www.x.com",
+    "mobile.x.com",
+    "twitter.com",
+    "www.twitter.com",
+    "mobile.twitter.com",
+})
+_THREADS_HOSTS = frozenset({
+    "threads.net",
+    "www.threads.net",
+    "threads.com",
+    "www.threads.com",
+})
+_LINKEDIN_HOSTS = frozenset({"linkedin.com", "www.linkedin.com"})
+_TELEGRAM_HOSTS = frozenset({"t.me", "telegram.me"})
 _SOUNDCLOUD_PAGE_HOSTS = frozenset({"soundcloud.com", "www.soundcloud.com", "m.soundcloud.com"})
 _SOUNDCLOUD_HOSTS = frozenset({*_SOUNDCLOUD_PAGE_HOSTS, "w.soundcloud.com"})
+_SPOTIFY_HOSTS = frozenset({"open.spotify.com"})
 _GOOGLE_DRIVE_HOSTS = frozenset({"drive.google.com"})
+_GOOGLE_PHOTOS_HOSTS = frozenset({"photos.app.goo.gl", "photos.google.com"})
+_CANVA_HOSTS = frozenset({"canva.com", "www.canva.com"})
 
 _YOUTUBE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 _VIMEO_ID_RE = re.compile(r"^\d+$")
 _DRIVE_ID_RE = re.compile(r"^[A-Za-z0-9_-]{10,}$")
+_DAILYMOTION_ID_RE = re.compile(r"^[A-Za-z0-9]+$")
+_INSTAGRAM_SHORTCODE_RE = re.compile(r"^[A-Za-z0-9_-]{5,64}$")
+_NUMERIC_ID_RE = re.compile(r"^\d+$")
+_ALNUM_SLUG_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+_HANDLE_RE = re.compile(r"^[A-Za-z0-9._-]{1,100}$")
+_SPOTIFY_ID_RE = re.compile(r"^[A-Za-z0-9]{10,64}$")
+_CANVA_ID_RE = re.compile(r"^[A-Za-z0-9_-]{6,64}$")
 
 
 class MediaValidationError(ValueError):
@@ -484,10 +550,47 @@ def save_optimized_image(
     return target_path
 
 
+def _has_traversal_segments(pathname: str) -> bool:
+    decoded = unquote(pathname or "")
+    for candidate in (pathname or "", decoded):
+        segments = candidate.replace("\\", "/").split("/")
+        if "." in segments or ".." in segments:
+            return True
+    return False
+
+
+def _get_path_extension(pathname: str) -> str:
+    clean_path = (pathname or "").split("?", 1)[0].split("#", 1)[0]
+    last_segment = clean_path.rsplit("/", 1)[-1]
+    dot_idx = last_segment.rfind(".")
+    if dot_idx <= 0:
+        return ""
+    return last_segment[dot_idx:].lower()
+
+
+def _is_public_hostname(host: str) -> bool:
+    cleaned = (host or "").strip().lower().rstrip(".")
+    if (
+        not cleaned
+        or cleaned == "localhost"
+        or cleaned.endswith((".localhost", ".local", ".internal"))
+    ):
+        return False
+    if "." not in cleaned:
+        return False
+    try:
+        ipaddress.ip_address(cleaned)
+        return False
+    except ValueError:
+        pass
+    return True
+
+
 def _parse_youtube_embed(parsed) -> dict[str, Any]:
     host = (parsed.hostname or "").lower()
     segments = [seg for seg in parsed.path.split("/") if seg]
     video_id = ""
+    is_shorts = False
 
     if host == "youtu.be" and segments:
         video_id = segments[0]
@@ -495,6 +598,7 @@ def _parse_youtube_embed(parsed) -> dict[str, Any]:
         video_id = (parse_qs(parsed.query).get("v") or [""])[0]
     elif len(segments) >= 2 and segments[0] in ("shorts", "embed", "live"):
         video_id = segments[1]
+        is_shorts = segments[0] == "shorts"
 
     if not _YOUTUBE_ID_RE.match(video_id):
         raise MediaValidationError(
@@ -506,8 +610,16 @@ def _parse_youtube_embed(parsed) -> dict[str, Any]:
     return {
         "mediaType": "video",
         "provider": "youtube",
-        "canonicalUrl": f"https://www.youtube.com/watch?v={video_id}",
+        "canonicalUrl": (
+            f"https://www.youtube.com/shorts/{video_id}"
+            if is_shorts
+            else f"https://www.youtube.com/watch?v={video_id}"
+        ),
         "embedUrl": f"https://www.youtube-nocookie.com/embed/{video_id}",
+        "renderMode": "iframe",
+        "aspectWidth": 9 if is_shorts else 16,
+        "aspectHeight": 16 if is_shorts else 9,
+        "_allowedTypes": ("video", "reel") if is_shorts else ("video",),
     }
 
 
@@ -533,6 +645,543 @@ def _parse_vimeo_embed(parsed) -> dict[str, Any]:
         "provider": "vimeo",
         "canonicalUrl": f"https://vimeo.com/{video_id}",
         "embedUrl": f"https://player.vimeo.com/video/{video_id}",
+        "renderMode": "iframe",
+        "aspectWidth": 16,
+        "aspectHeight": 9,
+        "_allowedTypes": ("video",),
+    }
+
+
+def _parse_dailymotion_embed(parsed) -> dict[str, Any]:
+    host = (parsed.hostname or "").lower()
+    segments = [seg for seg in parsed.path.split("/") if seg]
+    video_id = ""
+
+    if host == "dai.ly" and segments:
+        video_id = segments[0]
+    elif len(segments) >= 2 and segments[0] == "video":
+        video_id = segments[1]
+    elif len(segments) >= 3 and segments[0] == "embed" and segments[1] == "video":
+        video_id = segments[2]
+
+    if not _DAILYMOTION_ID_RE.match(video_id):
+        raise MediaValidationError(
+            "Invalid Dailymotion video URL or missing video ID.",
+            status_code=400,
+            code="INVALID_MEDIA_URL",
+        )
+
+    return {
+        "mediaType": "video",
+        "provider": "dailymotion",
+        "canonicalUrl": f"https://www.dailymotion.com/video/{video_id}",
+        "embedUrl": f"https://www.dailymotion.com/embed/video/{video_id}",
+        "renderMode": "iframe",
+        "aspectWidth": 16,
+        "aspectHeight": 9,
+        "_allowedTypes": ("video",),
+    }
+
+
+def _parse_instagram_embed(parsed) -> dict[str, Any]:
+    segments = [seg for seg in parsed.path.split("/") if seg]
+    if len(segments) >= 3 and segments[-2] == "embed" and segments[-1] == "captioned":
+        segments = segments[:-2]
+    elif len(segments) >= 3 and segments[-1] == "embed":
+        segments = segments[:-1]
+
+    kind = ""
+    shortcode = ""
+    if len(segments) >= 2 and segments[0] in ("reel", "reels", "p", "tv"):
+        kind, shortcode = segments[0], segments[1]
+    elif len(segments) >= 3 and segments[1] in ("reel", "reels", "p", "tv"):
+        kind, shortcode = segments[1], segments[2]
+
+    if kind and _INSTAGRAM_SHORTCODE_RE.match(shortcode):
+        norm_kind = "reel" if kind in ("reel", "reels") else kind
+        canonical_url = f"https://www.instagram.com/{norm_kind}/{shortcode}/"
+        embed_url = f"https://www.instagram.com/{norm_kind}/{shortcode}/embed/"
+        if norm_kind == "reel":
+            media_type = "reel"
+            allowed_types: tuple[str, ...] = ("reel", "video")
+        elif norm_kind == "p":
+            media_type = "post"
+            allowed_types = ("post", "image", "video", "reel")
+        else:
+            media_type = "video"
+            allowed_types = ("video", "reel", "post")
+        result = {
+            "mediaType": media_type,
+            "provider": "instagram",
+            "canonicalUrl": canonical_url,
+            "embedUrl": embed_url,
+            "renderMode": "iframe",
+            "_allowedTypes": allowed_types,
+        }
+        if norm_kind in ("reel", "tv"):
+            result["aspectWidth"] = 9
+            result["aspectHeight"] = 16
+        return result
+
+    if (
+        len(segments) >= 3
+        and segments[0] == "stories"
+        and _HANDLE_RE.match(segments[1])
+        and _ALNUM_SLUG_RE.match(segments[2])
+    ):
+        return {
+            "mediaType": "post",
+            "provider": "instagram",
+            "canonicalUrl": f"https://www.instagram.com/stories/{segments[1]}/{segments[2]}/",
+            "embedUrl": "",
+            "renderMode": "card",
+            "_allowedTypes": ("post", "reel", "video", "image"),
+        }
+
+    if (
+        len(segments) >= 2
+        and segments[0] == "share"
+        and all(_ALNUM_SLUG_RE.match(seg) for seg in segments[1:])
+    ):
+        media_type = "reel" if (len(segments) >= 3 and segments[1] == "reel") else "post"
+        return {
+            "mediaType": media_type,
+            "provider": "instagram",
+            "canonicalUrl": f"https://www.instagram.com/{'/'.join(segments)}/",
+            "embedUrl": "",
+            "renderMode": "card",
+            "_allowedTypes": ("post", "reel", "video", "image"),
+        }
+
+    raise MediaValidationError(
+        "Invalid Instagram reel, post, or story URL.",
+        status_code=400,
+        code="INVALID_MEDIA_URL",
+    )
+
+
+def _parse_facebook_embed(parsed, _depth: int = 0) -> dict[str, Any]:
+    host = (parsed.hostname or "").lower()
+    segments = [seg for seg in parsed.path.split("/") if seg]
+    clean_path = parsed.path.rstrip("/")
+    qs = parse_qs(parsed.query)
+
+    if clean_path in ("/plugins/video.php", "/plugins/post.php"):
+        if _depth > 0:
+            raise MediaValidationError(
+                "Invalid nested Facebook plugin URL.",
+                status_code=400,
+                code="INVALID_MEDIA_URL",
+            )
+        href = (qs.get("href") or [""])[0].strip()
+        if not href:
+            raise MediaValidationError(
+                "Facebook plugin URL is missing target 'href' parameter.",
+                status_code=400,
+                code="INVALID_MEDIA_URL",
+            )
+        if re.search(r"[\s\x00-\x1f\x7f<>\"']", href):
+            raise MediaValidationError(
+                "Facebook plugin target URL contains unsafe characters.",
+                status_code=400,
+                code="UNSAFE_MEDIA_URL",
+            )
+        inner = urlsplit(href)
+        if inner.scheme.lower() != "https":
+            raise MediaValidationError(
+                "Facebook plugin target URL must use HTTPS.",
+                status_code=400,
+                code="INSECURE_MEDIA_URL",
+            )
+        if inner.username or inner.password or _has_traversal_segments(inner.path):
+            raise MediaValidationError(
+                "Facebook plugin target URL is unsafe.",
+                status_code=400,
+                code="UNSAFE_MEDIA_URL",
+            )
+        inner_host = (inner.hostname or "").lower()
+        if inner_host not in _FACEBOOK_HOSTS:
+            raise MediaValidationError(
+                "Facebook plugin target URL must point to facebook.com.",
+                status_code=400,
+                code="UNTRUSTED_MEDIA_DOMAIN",
+            )
+        return _parse_facebook_embed(inner, _depth=_depth + 1)
+
+    if host == "fb.watch":
+        if not segments or not _ALNUM_SLUG_RE.match(segments[0]):
+            raise MediaValidationError(
+                "Invalid fb.watch video URL.",
+                status_code=400,
+                code="INVALID_MEDIA_URL",
+            )
+        return {
+            "mediaType": "video",
+            "provider": "facebook",
+            "canonicalUrl": f"https://fb.watch/{segments[0]}/",
+            "embedUrl": "",
+            "renderMode": "card",
+            "_allowedTypes": ("video", "reel", "post"),
+        }
+
+    if len(segments) >= 2 and segments[0] == "share" and all(_ALNUM_SLUG_RE.match(s) for s in segments[1:]):
+        sub = segments[1]
+        if sub == "r" and len(segments) >= 3:
+            share_type = "reel"
+        elif sub == "v" and len(segments) >= 3:
+            share_type = "video"
+        else:
+            share_type = "post"
+        return {
+            "mediaType": share_type,
+            "provider": "facebook",
+            "canonicalUrl": f"https://www.facebook.com/{'/'.join(segments)}/",
+            "embedUrl": "",
+            "renderMode": "card",
+            "_allowedTypes": ("post", "reel", "video", "image"),
+        }
+
+    if len(segments) >= 2 and segments[0] in ("reel", "reels") and _ALNUM_SLUG_RE.match(segments[1]):
+        canonical_url = f"https://www.facebook.com/reel/{segments[1]}"
+        embed_url = (
+            f"https://www.facebook.com/plugins/video.php?href={quote(canonical_url, safe='')}"
+            "&show_text=false"
+        )
+        return {
+            "mediaType": "reel",
+            "provider": "facebook",
+            "canonicalUrl": canonical_url,
+            "embedUrl": embed_url,
+            "renderMode": "iframe",
+            "aspectWidth": 9,
+            "aspectHeight": 16,
+            "_allowedTypes": ("reel", "video"),
+        }
+
+    if clean_path in ("/watch", "/video.php", "/video/video.php"):
+        video_id = (qs.get("v") or [""])[0].strip()
+        if not video_id or not _ALNUM_SLUG_RE.match(video_id):
+            raise MediaValidationError(
+                "Invalid Facebook watch URL or missing video ID.",
+                status_code=400,
+                code="INVALID_MEDIA_URL",
+            )
+        canonical_url = f"https://www.facebook.com/watch/?v={video_id}"
+        embed_url = (
+            f"https://www.facebook.com/plugins/video.php?href={quote(canonical_url, safe='')}"
+            "&show_text=false"
+        )
+        return {
+            "mediaType": "video",
+            "provider": "facebook",
+            "canonicalUrl": canonical_url,
+            "embedUrl": embed_url,
+            "renderMode": "iframe",
+            "aspectWidth": 16,
+            "aspectHeight": 9,
+            "_allowedTypes": ("video", "reel"),
+        }
+
+    if "videos" in segments and len(segments) >= 2 and segments[-1] != "videos":
+        canonical_url = f"https://www.facebook.com/{'/'.join(segments)}"
+        embed_url = (
+            f"https://www.facebook.com/plugins/video.php?href={quote(canonical_url, safe='')}"
+            "&show_text=false"
+        )
+        return {
+            "mediaType": "video",
+            "provider": "facebook",
+            "canonicalUrl": canonical_url,
+            "embedUrl": embed_url,
+            "renderMode": "iframe",
+            "aspectWidth": 16,
+            "aspectHeight": 9,
+            "_allowedTypes": ("video", "reel"),
+        }
+
+    canonical_post_url = ""
+    if clean_path in ("/permalink.php", "/story.php"):
+        story_fbid = (qs.get("story_fbid") or [""])[0].strip()
+        page_id = (qs.get("id") or [""])[0].strip()
+        if story_fbid and page_id and _ALNUM_SLUG_RE.match(story_fbid) and _ALNUM_SLUG_RE.match(page_id):
+            canonical_post_url = (
+                f"https://www.facebook.com{clean_path}"
+                f"?story_fbid={quote(story_fbid, safe='')}&id={quote(page_id, safe='')}"
+            )
+    elif clean_path in ("/photo", "/photo.php"):
+        fbid = (qs.get("fbid") or [""])[0].strip()
+        if fbid and _ALNUM_SLUG_RE.match(fbid):
+            canonical_post_url = f"https://www.facebook.com/photo/?fbid={quote(fbid, safe='')}"
+    elif len(segments) >= 3 and (
+        "posts" in segments
+        or (segments[0] == "groups" and "permalink" in segments)
+        or "photos" in segments
+    ):
+        canonical_post_url = f"https://www.facebook.com/{'/'.join(segments)}"
+
+    if canonical_post_url:
+        embed_url = (
+            f"https://www.facebook.com/plugins/post.php?href={quote(canonical_post_url, safe='')}"
+            "&show_text=true"
+        )
+        return {
+            "mediaType": "post",
+            "provider": "facebook",
+            "canonicalUrl": canonical_post_url,
+            "embedUrl": embed_url,
+            "renderMode": "iframe",
+            "_allowedTypes": ("post", "image", "video"),
+        }
+
+    raise MediaValidationError(
+        "Invalid Facebook reel, video, post, or photo URL.",
+        status_code=400,
+        code="INVALID_MEDIA_URL",
+    )
+
+
+def _parse_tiktok_embed(parsed) -> dict[str, Any]:
+    host = (parsed.hostname or "").lower()
+    segments = [seg for seg in parsed.path.split("/") if seg]
+
+    if host in _TIKTOK_SHORT_HOSTS:
+        if not segments or not _ALNUM_SLUG_RE.match(segments[0]):
+            raise MediaValidationError(
+                "Invalid shortened TikTok URL.",
+                status_code=400,
+                code="INVALID_MEDIA_URL",
+            )
+        return {
+            "mediaType": "reel",
+            "provider": "tiktok",
+            "canonicalUrl": f"https://{host}/{segments[0]}",
+            "embedUrl": "",
+            "renderMode": "card",
+            "_allowedTypes": ("reel", "video", "post"),
+        }
+
+    if len(segments) >= 2 and segments[0] == "t" and _ALNUM_SLUG_RE.match(segments[1]):
+        return {
+            "mediaType": "reel",
+            "provider": "tiktok",
+            "canonicalUrl": f"https://www.tiktok.com/t/{segments[1]}",
+            "embedUrl": "",
+            "renderMode": "card",
+            "_allowedTypes": ("reel", "video", "post"),
+        }
+
+    if (
+        len(segments) >= 3
+        and segments[0].startswith("@")
+        and len(segments[0]) > 1
+        and segments[1] in ("video", "photo")
+        and _NUMERIC_ID_RE.match(segments[2])
+    ):
+        user, kind, item_id = segments[0], segments[1], segments[2]
+        if kind == "video":
+            return {
+                "mediaType": "reel",
+                "provider": "tiktok",
+                "canonicalUrl": f"https://www.tiktok.com/{user}/video/{item_id}",
+                "embedUrl": f"https://www.tiktok.com/embed/v2/{item_id}",
+                "renderMode": "iframe",
+                "aspectWidth": 9,
+                "aspectHeight": 16,
+                "_allowedTypes": ("reel", "video"),
+            }
+        return {
+            "mediaType": "post",
+            "provider": "tiktok",
+            "canonicalUrl": f"https://www.tiktok.com/{user}/photo/{item_id}",
+            "embedUrl": "",
+            "renderMode": "card",
+            "_allowedTypes": ("post", "image"),
+        }
+
+    if (
+        len(segments) >= 2
+        and (segments[0] == "video" or segments[0] == "embed")
+        and _NUMERIC_ID_RE.match(segments[-1])
+    ):
+        item_id = segments[-1]
+        return {
+            "mediaType": "reel",
+            "provider": "tiktok",
+            "canonicalUrl": f"https://www.tiktok.com/embed/v2/{item_id}",
+            "embedUrl": f"https://www.tiktok.com/embed/v2/{item_id}",
+            "renderMode": "iframe",
+            "aspectWidth": 9,
+            "aspectHeight": 16,
+            "_allowedTypes": ("reel", "video"),
+        }
+
+    raise MediaValidationError(
+        "Invalid TikTok video or photo URL.",
+        status_code=400,
+        code="INVALID_MEDIA_URL",
+    )
+
+
+def _parse_x_embed(parsed) -> dict[str, Any]:
+    segments = [seg for seg in parsed.path.split("/") if seg]
+    status_id = ""
+    if len(segments) >= 3 and segments[1] == "status" and _NUMERIC_ID_RE.match(segments[2]):
+        status_id = segments[2]
+        canonical_url = f"https://x.com/{segments[0]}/status/{status_id}"
+    elif (
+        len(segments) >= 4
+        and segments[0] == "i"
+        and segments[1] == "web"
+        and segments[2] == "status"
+        and _NUMERIC_ID_RE.match(segments[3])
+    ):
+        status_id = segments[3]
+        canonical_url = f"https://x.com/i/web/status/{status_id}"
+    else:
+        canonical_url = ""
+
+    if not status_id:
+        raise MediaValidationError(
+            "Invalid X/Twitter post URL.",
+            status_code=400,
+            code="INVALID_MEDIA_URL",
+        )
+
+    return {
+        "mediaType": "post",
+        "provider": "x",
+        "canonicalUrl": canonical_url,
+        "embedUrl": "",
+        "renderMode": "card",
+        "_allowedTypes": ("post", "video", "image"),
+    }
+
+
+def _parse_threads_embed(parsed) -> dict[str, Any]:
+    segments = [seg for seg in parsed.path.split("/") if seg]
+    if len(segments) >= 4 and segments[-1] == "embed":
+        segments = segments[:-1]
+
+    if (
+        len(segments) >= 3
+        and segments[0].startswith("@")
+        and len(segments[0]) > 1
+        and segments[1] == "post"
+        and _ALNUM_SLUG_RE.match(segments[2])
+    ):
+        canonical_url = f"https://www.threads.net/{segments[0]}/post/{segments[2]}"
+        return {
+            "mediaType": "post",
+            "provider": "threads",
+            "canonicalUrl": canonical_url,
+            "embedUrl": f"{canonical_url}/embed",
+            "renderMode": "iframe",
+            "_allowedTypes": ("post", "video", "reel", "image"),
+        }
+
+    if len(segments) >= 2 and segments[0] == "t" and _ALNUM_SLUG_RE.match(segments[1]):
+        canonical_url = f"https://www.threads.net/t/{segments[1]}"
+        return {
+            "mediaType": "post",
+            "provider": "threads",
+            "canonicalUrl": canonical_url,
+            "embedUrl": "",
+            "renderMode": "card",
+            "_allowedTypes": ("post", "video", "reel", "image"),
+        }
+
+    raise MediaValidationError(
+        "Invalid Threads post URL.",
+        status_code=400,
+        code="INVALID_MEDIA_URL",
+    )
+
+
+def _parse_linkedin_embed(parsed) -> dict[str, Any]:
+    segments = [seg for seg in parsed.path.split("/") if seg]
+    if len(segments) >= 4 and segments[0] == "embed" and segments[1] == "feed" and segments[2] == "update":
+        urn = segments[3]
+        if urn.startswith("urn:li:"):
+            canonical_url = f"https://www.linkedin.com/feed/update/{urn}"
+            return {
+                "mediaType": "post",
+                "provider": "linkedin",
+                "canonicalUrl": canonical_url,
+                "embedUrl": f"https://www.linkedin.com/embed/feed/update/{urn}",
+                "renderMode": "iframe",
+                "_allowedTypes": ("post", "video", "image"),
+            }
+
+    if len(segments) >= 3 and segments[0] == "feed" and segments[1] == "update":
+        urn = segments[2]
+        canonical_url = f"https://www.linkedin.com/feed/update/{urn}"
+        if urn.startswith("urn:li:"):
+            return {
+                "mediaType": "post",
+                "provider": "linkedin",
+                "canonicalUrl": canonical_url,
+                "embedUrl": f"https://www.linkedin.com/embed/feed/update/{urn}",
+                "renderMode": "iframe",
+                "_allowedTypes": ("post", "video", "image"),
+            }
+        return {
+            "mediaType": "post",
+            "provider": "linkedin",
+            "canonicalUrl": canonical_url,
+            "embedUrl": "",
+            "renderMode": "card",
+            "_allowedTypes": ("post", "video", "image"),
+        }
+
+    if len(segments) >= 2 and segments[0] in ("posts", "pulse"):
+        canonical_url = f"https://www.linkedin.com/{'/'.join(segments)}"
+        activity_match = re.search(r"activity-(\d+)", segments[1]) if segments[0] == "posts" else None
+        if activity_match:
+            urn = f"urn:li:activity:{activity_match.group(1)}"
+            return {
+                "mediaType": "post",
+                "provider": "linkedin",
+                "canonicalUrl": canonical_url,
+                "embedUrl": f"https://www.linkedin.com/embed/feed/update/{urn}",
+                "renderMode": "iframe",
+                "_allowedTypes": ("post", "video", "image"),
+            }
+        return {
+            "mediaType": "post",
+            "provider": "linkedin",
+            "canonicalUrl": canonical_url,
+            "embedUrl": "",
+            "renderMode": "card",
+            "_allowedTypes": ("post", "video", "image"),
+        }
+
+    raise MediaValidationError(
+        "Invalid LinkedIn post URL.",
+        status_code=400,
+        code="INVALID_MEDIA_URL",
+    )
+
+
+def _parse_telegram_embed(parsed) -> dict[str, Any]:
+    segments = [seg for seg in parsed.path.split("/") if seg]
+    if len(segments) >= 3 and segments[0] == "s" and _HANDLE_RE.match(segments[1]) and _NUMERIC_ID_RE.match(segments[2]):
+        canonical_url = f"https://t.me/{segments[1]}/{segments[2]}"
+    elif len(segments) >= 2 and _HANDLE_RE.match(segments[0]) and _NUMERIC_ID_RE.match(segments[1]):
+        canonical_url = f"https://t.me/{segments[0]}/{segments[1]}"
+    else:
+        raise MediaValidationError(
+            "Invalid Telegram channel post URL.",
+            status_code=400,
+            code="INVALID_MEDIA_URL",
+        )
+
+    return {
+        "mediaType": "post",
+        "provider": "telegram",
+        "canonicalUrl": canonical_url,
+        "embedUrl": f"{canonical_url}?embed=1",
+        "renderMode": "iframe",
+        "_allowedTypes": ("post", "video", "image", "audio"),
     }
 
 
@@ -589,6 +1238,37 @@ def _parse_soundcloud_embed(parsed) -> dict[str, Any]:
         "provider": "soundcloud",
         "canonicalUrl": canonical_url,
         "embedUrl": embed_url,
+        "renderMode": "iframe",
+        "_allowedTypes": ("audio",),
+    }
+
+
+def _parse_spotify_embed(parsed) -> dict[str, Any]:
+    segments = [seg for seg in parsed.path.split("/") if seg]
+    if segments and segments[0].startswith("intl-"):
+        segments = segments[1:]
+    if segments and segments[0] == "embed":
+        segments = segments[1:]
+
+    if (
+        len(segments) < 2
+        or segments[0] not in ("track", "episode", "show", "playlist", "album")
+        or not _SPOTIFY_ID_RE.match(segments[1])
+    ):
+        raise MediaValidationError(
+            "Invalid Spotify audio URL.",
+            status_code=400,
+            code="INVALID_MEDIA_URL",
+        )
+
+    kind, item_id = segments[0], segments[1]
+    return {
+        "mediaType": "audio",
+        "provider": "spotify",
+        "canonicalUrl": f"https://open.spotify.com/{kind}/{item_id}",
+        "embedUrl": f"https://open.spotify.com/embed/{kind}/{item_id}",
+        "renderMode": "iframe",
+        "_allowedTypes": ("audio",),
     }
 
 
@@ -603,7 +1283,7 @@ def _parse_google_drive_embed(parsed) -> dict[str, Any]:
 
     if not _DRIVE_ID_RE.match(file_id):
         raise MediaValidationError(
-            "Invalid Google Drive audio URL or missing file ID.",
+            "Invalid Google Drive media URL or missing file ID.",
             status_code=400,
             code="INVALID_MEDIA_URL",
         )
@@ -613,20 +1293,615 @@ def _parse_google_drive_embed(parsed) -> dict[str, Any]:
         "provider": "google_drive",
         "canonicalUrl": f"https://drive.google.com/file/d/{file_id}/view",
         "embedUrl": f"https://drive.google.com/file/d/{file_id}/preview",
+        "renderMode": "iframe",
+        "_allowedTypes": ("audio", "video", "image", "post"),
     }
+
+
+def _parse_google_photos_embed(parsed) -> dict[str, Any]:
+    host = (parsed.hostname or "").lower()
+    segments = [seg for seg in parsed.path.split("/") if seg]
+    if not segments:
+        raise MediaValidationError(
+            "Invalid Google Photos link.",
+            status_code=400,
+            code="INVALID_MEDIA_URL",
+        )
+
+    if host == "photos.app.goo.gl":
+        canonical_url = f"https://photos.app.goo.gl/{segments[0]}"
+    elif (
+        segments[0] in ("share", "photo", "album")
+        or (len(segments) >= 3 and segments[0] == "u" and segments[2] in ("share", "photo", "album"))
+    ):
+        canonical_url = f"https://photos.google.com/{'/'.join(segments)}"
+        if parsed.query:
+            canonical_url = f"{canonical_url}?{parsed.query}"
+    else:
+        raise MediaValidationError(
+            "Invalid Google Photos album or photo URL.",
+            status_code=400,
+            code="INVALID_MEDIA_URL",
+        )
+
+    return {
+        "mediaType": "image",
+        "provider": "google_photos",
+        "canonicalUrl": canonical_url,
+        "embedUrl": "",
+        "renderMode": "card",
+        "_allowedTypes": ("image", "post", "video"),
+    }
+
+
+def _parse_canva_embed(parsed) -> dict[str, Any]:
+    segments = [seg for seg in parsed.path.split("/") if seg]
+    if len(segments) < 2 or segments[0] != "design" or not _CANVA_ID_RE.match(segments[1]):
+        raise MediaValidationError(
+            "Invalid Canva design URL.",
+            status_code=400,
+            code="INVALID_MEDIA_URL",
+        )
+
+    design_id = segments[1]
+    return {
+        "mediaType": "post",
+        "provider": "canva",
+        "canonicalUrl": f"https://www.canva.com/design/{design_id}/view",
+        "embedUrl": f"https://www.canva.com/design/{design_id}/view?embed",
+        "renderMode": "iframe",
+        "_allowedTypes": ("post", "image", "video"),
+    }
+
+
+def _parse_external_image_url(parsed, cleaned: str) -> dict[str, Any]:
+    host = (parsed.hostname or "").lower()
+    if not _is_public_hostname(host):
+        raise MediaValidationError(
+            f"Domain '{host}' is not allowed for external image links.",
+            status_code=400,
+            code="UNTRUSTED_MEDIA_DOMAIN",
+        )
+    ext = _get_path_extension(parsed.path)
+    if ext == ".svg" or ext in RAW_AV_EXTENSIONS:
+        raise MediaValidationError(
+            f"Unsupported external image extension '{ext}'.",
+            status_code=400,
+            code="UNSUPPORTED_MEDIA_TYPE",
+        )
+    return {
+        "mediaType": "image",
+        "provider": "external_image",
+        "canonicalUrl": cleaned,
+        "embedUrl": "",
+        "renderMode": "image",
+        "_allowedTypes": ("image",),
+    }
+
+
+_SHORT_URL_CACHE_MAX = 256
+_short_url_cache: dict[str, str] = {}
+_short_url_cache_lock = threading.Lock()
+_media_dimensions_cache: dict[str, tuple[int, int]] = {}
+_media_dimensions_cache_lock = threading.Lock()
+
+_DIM_PROBE_HOSTS = frozenset({
+    *_FACEBOOK_HOSTS,
+    *_INSTAGRAM_HOSTS,
+    *_TIKTOK_HOSTS,
+    *_YOUTUBE_HOSTS,
+    *_VIMEO_HOSTS,
+    *_DAILYMOTION_HOSTS,
+})
+
+_OG_VIDEO_W_1 = re.compile(
+    r'<meta[^>]+property=["\']og:video:width["\'][^>]+content=["\'](\d+)["\']',
+    re.IGNORECASE,
+)
+_OG_VIDEO_W_2 = re.compile(
+    r'<meta[^>]+content=["\'](\d+)["\'][^>]+property=["\']og:video:width["\']',
+    re.IGNORECASE,
+)
+_OG_VIDEO_H_1 = re.compile(
+    r'<meta[^>]+property=["\']og:video:height["\'][^>]+content=["\'](\d+)["\']',
+    re.IGNORECASE,
+)
+_OG_VIDEO_H_2 = re.compile(
+    r'<meta[^>]+content=["\'](\d+)["\'][^>]+property=["\']og:video:height["\']',
+    re.IGNORECASE,
+)
+_OG_IMAGE_W_1 = re.compile(
+    r'<meta[^>]+property=["\']og:image:width["\'][^>]+content=["\'](\d+)["\']',
+    re.IGNORECASE,
+)
+_OG_IMAGE_W_2 = re.compile(
+    r'<meta[^>]+content=["\'](\d+)["\'][^>]+property=["\']og:image:width["\']',
+    re.IGNORECASE,
+)
+_OG_IMAGE_H_1 = re.compile(
+    r'<meta[^>]+property=["\']og:image:height["\'][^>]+content=["\'](\d+)["\']',
+    re.IGNORECASE,
+)
+_OG_IMAGE_H_2 = re.compile(
+    r'<meta[^>]+content=["\'](\d+)["\'][^>]+property=["\']og:image:height["\']',
+    re.IGNORECASE,
+)
+_FB_ORIG_W_RE = re.compile(r'\\?"original_width\\?"\s*:\s*(\d{3,4})')
+_FB_ORIG_H_RE = re.compile(r'\\?"original_height\\?"\s*:\s*(\d{3,4})')
+_VIDEO_WIDTH_RE = re.compile(r'\\?"video_width\\?"\s*:\s*(\d{3,4})')
+_VIDEO_HEIGHT_RE = re.compile(r'\\?"video_height\\?"\s*:\s*(\d{3,4})')
+_DATA_VIDEO_W_RE = re.compile(r'data-video-width=["\'](\d{2,4})["\']', re.IGNORECASE)
+_DATA_VIDEO_H_RE = re.compile(r'data-video-height=["\'](\d{2,4})["\']', re.IGNORECASE)
+_VIDEO_TAG_WH_1 = re.compile(
+    r'<video\b[^>]*\bwidth=["\'](\d{2,4})["\'][^>]*\bheight=["\'](\d{2,4})["\']',
+    re.IGNORECASE,
+)
+_VIDEO_TAG_WH_2 = re.compile(
+    r'<video\b[^>]*\bheight=["\'](\d{2,4})["\'][^>]*\bwidth=["\'](\d{2,4})["\']',
+    re.IGNORECASE,
+)
+_FB_VIDEO_JSON_PAIR_RE = re.compile(
+    r'(?:playable_url|browser_native_sd_url|videoData|preferred_thumbnail|dash_manifest)[\s\S]{0,600}?'
+    r'\\?"width\\?"\s*:\s*(\d{3,4})\s*,\s*\\?"height\\?"\s*:\s*(\d{3,4})',
+    re.IGNORECASE,
+)
+_PLUGIN_PADDING_RATIO_RE = re.compile(
+    r'padding-(?:bottom|top)\s*:\s*(\d+(?:\.\d+)?)%', re.IGNORECASE
+)
+
+_OG_URL_META_RE_1 = re.compile(
+    r'<meta[^>]+property=["\']og:url["\'][^>]+content=["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
+_OG_URL_META_RE_2 = re.compile(
+    r'<meta[^>]+content=["\']([^"\']+)["\'][^>]+property=["\']og:url["\']',
+    re.IGNORECASE,
+)
+_CANONICAL_LINK_RE_1 = re.compile(
+    r'<link[^>]+rel=["\']canonical["\'][^>]+href=["\']([^"\']+)["\']',
+    re.IGNORECASE,
+)
+_CANONICAL_LINK_RE_2 = re.compile(
+    r'<link[^>]+href=["\']([^"\']+)["\'][^>]+rel=["\']canonical["\']',
+    re.IGNORECASE,
+)
+_FB_HTML_VIDEO_URL_RE = re.compile(
+    r'https://(?:www\.|m\.|web\.)?facebook\.com/(?:reel/\d+|watch/\?v=\d+|[A-Za-z0-9._-]+/videos/\d+|groups/\d+/videos/\d+|[A-Za-z0-9._-]+/posts/[A-Za-z0-9_-]+)',
+    re.IGNORECASE,
+)
+_FB_HTML_VIDEO_ID_RE = re.compile(r'\\?"video_id\\?"\s*:\s*\\?"(\d{6,30})\\?"')
+_TIKTOK_HTML_URL_RE = re.compile(
+    r'https://(?:www\.)?tiktok\.com/@[A-Za-z0-9._-]+/video/\d+',
+    re.IGNORECASE,
+)
+_IG_HTML_URL_RE = re.compile(
+    r'https://(?:www\.)?instagram\.com/(?:reel|p|tv)/[A-Za-z0-9_-]{5,64}/?',
+    re.IGNORECASE,
+)
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _short_link_allowed_hosts(parsed) -> frozenset[str] | None:
+    host = (parsed.hostname or "").lower()
+    path = parsed.path or ""
+    if host == "fb.watch" or (host in _FACEBOOK_HOSTS and path.startswith("/share/")):
+        return _FACEBOOK_HOSTS
+    if host in _TIKTOK_SHORT_HOSTS or (host in _TIKTOK_HOSTS and path.startswith("/t/")):
+        return _TIKTOK_HOSTS
+    if host in _INSTAGRAM_HOSTS and path.startswith("/share/"):
+        return _INSTAGRAM_HOSTS
+    return None
+
+
+def _is_safe_same_platform_url(
+    candidate: str,
+    base_url: str,
+    allowed_hosts: frozenset[str],
+) -> str | None:
+    if not candidate or not isinstance(candidate, str):
+        return None
+    joined = urljoin(base_url, html.unescape(candidate.strip()))
+    if re.search(r"[\s\x00-\x1f\x7f<>\"']", joined):
+        return None
+    parsed = urlsplit(joined)
+    host = (parsed.hostname or "").lower()
+    path_lower = (parsed.path or "").lower()
+    if (
+        parsed.scheme.lower() != "https"
+        or parsed.username
+        or parsed.password
+        or _has_traversal_segments(parsed.path)
+        or host not in allowed_hosts
+        or "/login" in path_lower
+        or "/accounts/login" in path_lower
+    ):
+        return None
+    return joined
+
+
+def _extract_canonical_from_html(
+    html_text: str,
+    base_url: str,
+    allowed_hosts: frozenset[str],
+) -> str | None:
+    if not html_text:
+        return None
+
+    for pattern in (
+        _OG_URL_META_RE_1,
+        _OG_URL_META_RE_2,
+        _CANONICAL_LINK_RE_1,
+        _CANONICAL_LINK_RE_2,
+    ):
+        match = pattern.search(html_text)
+        if match:
+            safe_url = _is_safe_same_platform_url(
+                match.group(1), base_url, allowed_hosts
+            )
+            if safe_url and _short_link_allowed_hosts(urlsplit(safe_url)) is None:
+                return safe_url
+
+    if allowed_hosts is _FACEBOOK_HOSTS:
+        unescaped_html = html_text.replace("\\/", "/")
+        fb_post_match = re.search(
+            r'https://(?:www\.|m\.|web\.)?facebook\.com/(?:'
+            r'permalink\.php\?story_fbid=[A-Za-z0-9._-]+&(?:amp;)?id=[A-Za-z0-9._-]+|'
+            r'story\.php\?story_fbid=[A-Za-z0-9._-]+&(?:amp;)?id=[A-Za-z0-9._-]+|'
+            r'[A-Za-z0-9._-]+/posts/[A-Za-z0-9._-]+)',
+            unescaped_html,
+            re.IGNORECASE,
+        )
+        if fb_post_match:
+            safe_url = _is_safe_same_platform_url(
+                fb_post_match.group(0), base_url, allowed_hosts
+            )
+            if safe_url:
+                return safe_url
+        fb_match = _FB_HTML_VIDEO_URL_RE.search(unescaped_html)
+        if fb_match:
+            safe_url = _is_safe_same_platform_url(
+                fb_match.group(0), base_url, allowed_hosts
+            )
+            if safe_url:
+                return safe_url
+        id_match = _FB_HTML_VIDEO_ID_RE.search(html_text)
+        if id_match:
+            vid = id_match.group(1)
+            if "/share/r/" in base_url:
+                return f"https://www.facebook.com/reel/{vid}"
+            return f"https://www.facebook.com/watch/?v={vid}"
+    elif allowed_hosts is _TIKTOK_HOSTS:
+        tt_match = _TIKTOK_HTML_URL_RE.search(html_text)
+        if tt_match:
+            safe_url = _is_safe_same_platform_url(
+                tt_match.group(0), base_url, allowed_hosts
+            )
+            if safe_url:
+                return safe_url
+    elif allowed_hosts is _INSTAGRAM_HOSTS:
+        ig_match = _IG_HTML_URL_RE.search(html_text)
+        if ig_match:
+            safe_url = _is_safe_same_platform_url(
+                ig_match.group(0), base_url, allowed_hosts
+            )
+            if safe_url:
+                return safe_url
+
+    return None
+
+
+def _valid_dimension_pair(width: int, height: int) -> tuple[int, int] | None:
+    if width < 100 or width > 8000 or height < 100 or height > 8000:
+        return None
+    ratio = width / float(height)
+    if ratio < 0.35 or ratio > 3.0:
+        return None
+    return width, height
+
+
+def _extract_dimensions_from_html(html_text: str) -> tuple[int, int] | None:
+    if not html_text:
+        return None
+
+    for w_patterns, h_patterns in (
+        ((_DATA_VIDEO_W_RE,), (_DATA_VIDEO_H_RE,)),
+    ):
+        w_m = w_patterns[0].search(html_text)
+        h_m = h_patterns[0].search(html_text)
+        if w_m and h_m:
+            pair = _valid_dimension_pair(int(w_m.group(1)), int(h_m.group(1)))
+            if pair is not None:
+                return pair
+
+    tag_match_1 = _VIDEO_TAG_WH_1.search(html_text)
+    if tag_match_1:
+        pair = _valid_dimension_pair(int(tag_match_1.group(1)), int(tag_match_1.group(2)))
+        if pair is not None:
+            return pair
+
+    tag_match_2 = _VIDEO_TAG_WH_2.search(html_text)
+    if tag_match_2:
+        pair = _valid_dimension_pair(int(tag_match_2.group(2)), int(tag_match_2.group(1)))
+        if pair is not None:
+            return pair
+
+    for w_patterns, h_patterns in (
+        ((_OG_VIDEO_W_1, _OG_VIDEO_W_2), (_OG_VIDEO_H_1, _OG_VIDEO_H_2)),
+        ((_OG_IMAGE_W_1, _OG_IMAGE_W_2), (_OG_IMAGE_H_1, _OG_IMAGE_H_2)),
+        ((_FB_ORIG_W_RE,), (_FB_ORIG_H_RE,)),
+        ((_VIDEO_WIDTH_RE,), (_VIDEO_HEIGHT_RE,)),
+    ):
+        w_val = None
+        h_val = None
+        for wp in w_patterns:
+            m = wp.search(html_text)
+            if m:
+                w_val = int(m.group(1))
+                break
+        for hp in h_patterns:
+            m = hp.search(html_text)
+            if m:
+                h_val = int(m.group(1))
+                break
+        if w_val is not None and h_val is not None:
+            pair = _valid_dimension_pair(w_val, h_val)
+            if pair is not None:
+                return pair
+
+    for match in _FB_VIDEO_JSON_PAIR_RE.finditer(html_text):
+        pair = _valid_dimension_pair(int(match.group(1)), int(match.group(2)))
+        if pair is not None:
+            return pair
+
+    pad_match = _PLUGIN_PADDING_RATIO_RE.search(html_text)
+    if pad_match:
+        pct = float(pad_match.group(1))
+        if 33.0 <= pct <= 250.0:
+            pair = _valid_dimension_pair(1000, round(pct * 10))
+            if pair is not None:
+                return pair
+
+    return None
+
+
+def probe_media_dimensions(
+    raw_url: str,
+    *,
+    timeout: float = 4.0,
+    opener: Any = None,
+    use_cache: bool = True,
+) -> tuple[int, int] | None:
+    """Fetch bounded HTML metadata from allowlisted video/reel URLs to infer original aspect ratio."""
+    if not isinstance(raw_url, str) or not raw_url.strip():
+        return None
+    cleaned = raw_url.strip()
+    if re.search(r"[\s\x00-\x1f\x7f<>\"']", cleaned):
+        return None
+    parsed = urlsplit(cleaned)
+    host = (parsed.hostname or "").lower()
+    if (
+        parsed.scheme.lower() != "https"
+        or parsed.username
+        or parsed.password
+        or host not in _DIM_PROBE_HOSTS
+    ):
+        return None
+
+    should_cache = opener is None and use_cache
+    if should_cache:
+        with _media_dimensions_cache_lock:
+            cached = _media_dimensions_cache.get(cleaned)
+        if cached is not None:
+            return cached
+
+    active_opener = opener or urllib.request.build_opener()
+    req = urllib.request.Request(
+        cleaned,
+        method="GET",
+        headers={
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/126.0.0.0 Safari/537.36"
+            ),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9",
+        },
+    )
+    html_snippet = ""
+    try:
+        resp = active_opener.open(req, timeout=timeout)
+        try:
+            read_fn = getattr(resp, "read", None)
+            if callable(read_fn):
+                raw_body = read_fn(262144)
+                if isinstance(raw_body, bytes):
+                    html_snippet = raw_body.decode("utf-8", errors="ignore")
+                elif isinstance(raw_body, str):
+                    html_snippet = raw_body
+        finally:
+            close_fn = getattr(resp, "close", None)
+            if callable(close_fn):
+                close_fn()
+    except Exception:
+        return None
+
+    dims = _extract_dimensions_from_html(html_snippet)
+    if dims is not None and should_cache:
+        with _media_dimensions_cache_lock:
+            if len(_media_dimensions_cache) >= _SHORT_URL_CACHE_MAX:
+                _media_dimensions_cache.pop(next(iter(_media_dimensions_cache)), None)
+            _media_dimensions_cache[cleaned] = dims
+    return dims
+
+
+def resolve_short_social_url(
+    raw_url: str,
+    *,
+    timeout: float = 4.0,
+    max_hops: int = 5,
+    opener: Any = None,
+    use_cache: bool = True,
+) -> str:
+    """Safely resolve same-platform short/share social links without following off-domain redirects."""
+    if not isinstance(raw_url, str) or not raw_url.strip():
+        return raw_url
+    cleaned = raw_url.strip()
+    if re.search(r"[\s\x00-\x1f\x7f<>\"']", cleaned):
+        return raw_url
+    parsed = urlsplit(cleaned)
+    if parsed.scheme.lower() != "https" or parsed.username or parsed.password:
+        return raw_url
+
+    allowed_hosts = _short_link_allowed_hosts(parsed)
+    if not allowed_hosts:
+        return raw_url
+
+    should_cache = opener is None and use_cache
+    if should_cache:
+        with _short_url_cache_lock:
+            cached = _short_url_cache.get(cleaned)
+        if cached:
+            return cached
+
+    active_opener = opener or urllib.request.build_opener(_NoRedirectHandler())
+    current_url = cleaned
+
+    for _ in range(max(1, int(max_hops))):
+        req = urllib.request.Request(
+            current_url,
+            method="GET",
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/126.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        location = ""
+        html_snippet = ""
+        try:
+            resp = active_opener.open(req, timeout=timeout)
+            try:
+                status_code = getattr(resp, "status", 200)
+                headers = getattr(resp, "headers", None)
+                if status_code in (301, 302, 303, 307, 308) and headers:
+                    location = headers.get("Location") or headers.get("location") or ""
+                else:
+                    final_url = getattr(resp, "geturl", lambda: "")() or ""
+                    if final_url and final_url != current_url:
+                        location = final_url
+                    elif _short_link_allowed_hosts(urlsplit(current_url)) is not None:
+                        read_fn = getattr(resp, "read", None)
+                        if callable(read_fn):
+                            raw_body = read_fn(131072)
+                            if isinstance(raw_body, bytes):
+                                html_snippet = raw_body.decode("utf-8", errors="ignore")
+                            elif isinstance(raw_body, str):
+                                html_snippet = raw_body
+            finally:
+                close_fn = getattr(resp, "close", None)
+                if callable(close_fn):
+                    close_fn()
+        except urllib.error.HTTPError as err:
+            if err.code in (301, 302, 303, 307, 308) and err.headers:
+                location = err.headers.get("Location") or err.headers.get("location") or ""
+            else:
+                break
+        except Exception:
+            break
+
+        if html_snippet and not location:
+            extracted = _extract_canonical_from_html(
+                html_snippet, current_url, allowed_hosts
+            )
+            if extracted:
+                current_url = extracted
+            break
+
+        if not location:
+            break
+
+        raw_next = urljoin(current_url, location.strip())
+        if re.search(r"[\s\x00-\x1f\x7f<>\"']", raw_next):
+            break
+        next_parsed = urlsplit(raw_next)
+        next_host = (next_parsed.hostname or "").lower()
+        next_path_lower = (next_parsed.path or "").lower()
+
+        if (
+            next_parsed.scheme.lower() == "https"
+            and not next_parsed.username
+            and not next_parsed.password
+            and next_host in allowed_hosts
+            and ("/login" in next_path_lower or "/accounts/login" in next_path_lower)
+        ):
+            next_param = (parse_qs(next_parsed.query).get("next") or [""])[0].strip()
+            safe_next_target = _is_safe_same_platform_url(
+                next_param, current_url, allowed_hosts
+            )
+            if safe_next_target:
+                current_url = safe_next_target
+                if _short_link_allowed_hosts(urlsplit(current_url)) is None:
+                    break
+                continue
+            break
+
+        safe_redirect = _is_safe_same_platform_url(
+            location.strip(), current_url, allowed_hosts
+        )
+        if not safe_redirect:
+            break
+
+        current_url = safe_redirect
+        if _short_link_allowed_hosts(urlsplit(current_url)) is None:
+            break
+
+    if current_url != cleaned:
+        try:
+            validate_external_media_url(current_url, resolve_redirects=False)
+            if should_cache:
+                with _short_url_cache_lock:
+                    if len(_short_url_cache) >= _SHORT_URL_CACHE_MAX:
+                        _short_url_cache.pop(next(iter(_short_url_cache)), None)
+                    _short_url_cache[cleaned] = current_url
+            return current_url
+        except MediaValidationError:
+            return raw_url
+
+    return raw_url
 
 
 def validate_external_media_url(
     raw_url: str,
     media_type: str | None = None,
+    *,
+    resolve_redirects: bool = False,
 ) -> dict[str, Any]:
-    """Validate and normalize an allowlisted external video/audio URL to a safe HTTPS embed URL."""
+    """Validate and normalize an external media URL (video, reel, post, image, or audio)."""
     if not isinstance(raw_url, str) or not raw_url.strip():
         raise MediaValidationError(
             "External media URL must be a non-empty string.",
             status_code=400,
             code="INVALID_MEDIA_URL",
         )
+
+    expected_type: str | None = None
+    if media_type is not None and str(media_type).strip():
+        expected_type = str(media_type).strip().lower()
+        if expected_type not in ALLOWED_EXTERNAL_MEDIA_TYPES:
+            raise MediaValidationError(
+                f"Invalid mediaType '{media_type}'. Must be one of: {', '.join(ALLOWED_EXTERNAL_MEDIA_TYPES)}.",
+                status_code=400,
+                code="INVALID_MEDIA_TYPE",
+            )
 
     cleaned = raw_url.strip()
     if re.search(r"[\s\x00-\x1f\x7f<>\"']", cleaned):
@@ -635,7 +1910,9 @@ def validate_external_media_url(
             status_code=400,
             code="UNSAFE_MEDIA_URL",
         )
-    parsed = urlsplit(cleaned)
+
+    candidate_url = resolve_short_social_url(cleaned) if resolve_redirects else cleaned
+    parsed = urlsplit(candidate_url)
 
     if parsed.scheme.lower() != "https":
         raise MediaValidationError(
@@ -647,6 +1924,13 @@ def validate_external_media_url(
     if parsed.username or parsed.password:
         raise MediaValidationError(
             "External media URLs must not contain embedded credentials.",
+            status_code=400,
+            code="UNSAFE_MEDIA_URL",
+        )
+
+    if _has_traversal_segments(parsed.path):
+        raise MediaValidationError(
+            "External media URL contains invalid path traversal segments.",
             status_code=400,
             code="UNSAFE_MEDIA_URL",
         )
@@ -663,31 +1947,81 @@ def validate_external_media_url(
         normalized = _parse_youtube_embed(parsed)
     elif host in _VIMEO_HOSTS:
         normalized = _parse_vimeo_embed(parsed)
+    elif host in _DAILYMOTION_HOSTS:
+        normalized = _parse_dailymotion_embed(parsed)
+    elif host in _INSTAGRAM_HOSTS:
+        normalized = _parse_instagram_embed(parsed)
+    elif host in _FACEBOOK_HOSTS:
+        normalized = _parse_facebook_embed(parsed)
+    elif host in _TIKTOK_HOSTS:
+        normalized = _parse_tiktok_embed(parsed)
+    elif host in _X_HOSTS:
+        normalized = _parse_x_embed(parsed)
+    elif host in _THREADS_HOSTS:
+        normalized = _parse_threads_embed(parsed)
+    elif host in _LINKEDIN_HOSTS:
+        normalized = _parse_linkedin_embed(parsed)
+    elif host in _TELEGRAM_HOSTS:
+        normalized = _parse_telegram_embed(parsed)
     elif host in _SOUNDCLOUD_HOSTS:
         normalized = _parse_soundcloud_embed(parsed)
+    elif host in _SPOTIFY_HOSTS:
+        normalized = _parse_spotify_embed(parsed)
     elif host in _GOOGLE_DRIVE_HOSTS:
         normalized = _parse_google_drive_embed(parsed)
+    elif host in _GOOGLE_PHOTOS_HOSTS:
+        normalized = _parse_google_photos_embed(parsed)
+    elif host in _CANVA_HOSTS:
+        normalized = _parse_canva_embed(parsed)
     else:
-        raise MediaValidationError(
-            f"Domain '{host}' is not in the external media allowlist.",
-            status_code=400,
-            code="UNTRUSTED_MEDIA_DOMAIN",
-        )
-
-    if media_type is not None and str(media_type).strip():
-        expected_type = str(media_type).strip().lower()
-        if expected_type not in ("video", "audio"):
+        ext = _get_path_extension(parsed.path)
+        if ext == ".svg" or ext in RAW_AV_EXTENSIONS:
             raise MediaValidationError(
-                f"Invalid mediaType '{media_type}'. Must be 'video' or 'audio'.",
+                f"Domain '{host}' is not in the external media allowlist.",
                 status_code=400,
-                code="INVALID_MEDIA_TYPE",
+                code="UNTRUSTED_MEDIA_DOMAIN",
             )
-        if expected_type != normalized["mediaType"]:
+        if ext in EXTERNAL_IMAGE_EXTENSIONS or expected_type == "image":
+            normalized = _parse_external_image_url(parsed, candidate_url)
+        else:
+            raise MediaValidationError(
+                f"Domain '{host}' is not in the external media allowlist.",
+                status_code=400,
+                code="UNTRUSTED_MEDIA_DOMAIN",
+            )
+
+    allowed_types = normalized.pop("_allowedTypes", (normalized["mediaType"],))
+    if expected_type is not None:
+        if expected_type not in allowed_types:
             raise MediaValidationError(
                 f"Provider '{normalized['provider']}' serves '{normalized['mediaType']}', not '{expected_type}'.",
                 status_code=400,
                 code="MEDIA_TYPE_MISMATCH",
             )
+        normalized["mediaType"] = expected_type
+
+    probed_dims = None
+    if (
+        resolve_redirects
+        and normalized.get("renderMode") == "iframe"
+        and normalized.get("mediaType") in ("video", "reel")
+    ):
+        if normalized.get("provider") == "facebook" and normalized.get("embedUrl"):
+            probed_dims = probe_media_dimensions(normalized["embedUrl"])
+            if probed_dims is None:
+                probed_dims = probe_media_dimensions(normalized["canonicalUrl"])
+        else:
+            probed_dims = probe_media_dimensions(normalized["canonicalUrl"])
+        if probed_dims is not None:
+            normalized["aspectWidth"], normalized["aspectHeight"] = probed_dims
+
+    if (
+        normalized.get("mediaType") == "reel"
+        and probed_dims is None
+        and int(normalized.get("aspectWidth") or 16) > int(normalized.get("aspectHeight") or 9)
+    ):
+        normalized["aspectWidth"] = 9
+        normalized["aspectHeight"] = 16
 
     return {
         **normalized,
@@ -696,7 +2030,19 @@ def validate_external_media_url(
     }
 
 
-def sanitize_external_media_links(raw_links: Any) -> list[dict[str, Any]]:
+def _parse_positive_aspect_dim(raw_val: Any) -> int | None:
+    if isinstance(raw_val, bool) or not isinstance(raw_val, int):
+        return None
+    if 1 <= raw_val <= 10000:
+        return raw_val
+    return None
+
+
+def sanitize_external_media_links(
+    raw_links: Any,
+    *,
+    resolve_redirects: bool = False,
+) -> list[dict[str, Any]]:
     """Normalize a list of external media links/strings, dropping invalid or untrusted entries."""
     if not raw_links:
         return []
@@ -707,12 +2053,29 @@ def sanitize_external_media_links(raw_links: Any) -> list[dict[str, Any]]:
     for item in raw_links:
         link_id = None
         clean_title = ""
+        stored_aw = None
+        stored_ah = None
         if isinstance(item, str):
             url_val = item
             requested_type = None
         elif isinstance(item, dict):
-            url_val = item.get("url") or item.get("embedUrl") or item.get("embed_url") or ""
+            url_val = (
+                item.get("url")
+                or item.get("canonicalUrl")
+                or item.get("canonical_url")
+                or item.get("embedUrl")
+                or item.get("embed_url")
+                or item.get("originalUrl")
+                or item.get("original_url")
+                or ""
+            )
             requested_type = item.get("mediaType") or item.get("media_type")
+            stored_aw = _parse_positive_aspect_dim(
+                item.get("aspectWidth") if "aspectWidth" in item else item.get("aspect_width")
+            )
+            stored_ah = _parse_positive_aspect_dim(
+                item.get("aspectHeight") if "aspectHeight" in item else item.get("aspect_height")
+            )
             raw_id = item.get("id")
             if isinstance(raw_id, int) and not isinstance(raw_id, bool):
                 link_id = raw_id
@@ -725,7 +2088,25 @@ def sanitize_external_media_links(raw_links: Any) -> list[dict[str, Any]]:
             continue
 
         try:
-            normalized = validate_external_media_url(url_val, media_type=requested_type)
+            needs_redirect = False
+            if isinstance(url_val, str) and url_val.strip():
+                try:
+                    needs_redirect = _short_link_allowed_hosts(urlsplit(url_val.strip())) is not None
+                except ValueError:
+                    needs_redirect = False
+            use_stored_dims = (
+                stored_aw is not None
+                and stored_ah is not None
+                and not needs_redirect
+            )
+            normalized = validate_external_media_url(
+                url_val,
+                media_type=requested_type,
+                resolve_redirects=False if use_stored_dims else resolve_redirects,
+            )
+            if use_stored_dims:
+                normalized["aspectWidth"] = stored_aw
+                normalized["aspectHeight"] = stored_ah
             if link_id is not None:
                 normalized["id"] = link_id
             if clean_title:

@@ -329,7 +329,7 @@ test('PostDetailView and PostMediaGallery render RTL detail view with lazy image
   assert.match(detailHtml, /min-width:\s*44px/);
 });
 
-test('AnnouncementsFeed keeps feed cards lightweight (no iframes) and renders allowlisted embed players inside PostDetailView when selected', () => {
+test('AnnouncementsFeed renders posts stacked vertically with full content and lazy-loaded embeds inline (no detail toggle)', () => {
   const posts = [
     {
       id: 77,
@@ -344,31 +344,240 @@ test('AnnouncementsFeed keeps feed cards lightweight (no iframes) and renders al
         'https://soundcloud.com/school/anthem',
       ],
     },
+    {
+      id: 78,
+      title: 'فعالية ثانية في الأسفل',
+      summary: 'ملخص الفعالية الثانية.',
+      category: 'general',
+      publishedAt: '2026-11-24T10:00:00Z',
+    },
   ];
 
   const feedHtml = renderToStaticMarkup(<AnnouncementsFeed posts={posts} />);
-  assert.doesNotMatch(
-    feedHtml,
-    /<iframe/,
-    'Feed overview must NOT mount heavy iframe players directly inside list cards'
-  );
   assert.match(feedHtml, /<img[^>]+loading="lazy"/, 'Card image must be lazy-loaded');
-  assert.ok(feedHtml.includes('فيديو'), 'Card should display lightweight video indicator');
-  assert.ok(feedHtml.includes('صوت'), 'Card should display lightweight audio indicator');
-  assert.ok(feedHtml.includes('عرض التفاصيل'), 'Card should provide detail view trigger');
+  assert.ok(feedHtml.includes('فيديو'), 'Card should display video indicator');
+  assert.ok(feedHtml.includes('صوت'), 'Card should display audio indicator');
+  assert.ok(feedHtml.includes('حفل تكريم المتفوقين'));
+  assert.ok(feedHtml.includes('فعالية ثانية في الأسفل'));
+  assert.ok(
+    feedHtml.includes('يتضمن الحفل كلمة اللجنة وعرضاً مرئياً وتسجيلاً صوتياً للنشيد المدرسي.')
+  );
+  assert.match(feedHtml, /<iframe[^>]+loading="lazy"/, 'Inline embeds must use lazy loading');
+  assert.match(feedHtml, /<iframe[^>]+youtube-nocookie\.com\/embed\/dQw4w9WgXcQ/);
+  assert.match(feedHtml, /<iframe[^>]+w\.soundcloud\.com\/player\/\?url=/);
+  assert.ok(!feedHtml.includes('عرض التفاصيل'), 'Detail toggle button must be omitted');
+  assert.ok(!feedHtml.includes('إخفاء التفاصيل'), 'Detail toggle button must be omitted');
   assert.match(feedHtml, /min-height:\s*44px/);
   assert.match(feedHtml, /min-width:\s*44px/);
+});
 
-  const selectedHtml = renderToStaticMarkup(
-    <AnnouncementsFeed posts={posts} initialSelectedPostId={77} />
+test('ExternalMediaEmbed adapts frame aspect-ratio and orientation to original portrait, square, and landscape media', () => {
+  const portraitFbHtml = renderToStaticMarkup(
+    <ExternalMediaEmbed
+      media={{
+        canonicalUrl: 'https://www.facebook.com/watch/?v=987654321',
+        mediaType: 'video',
+        aspectWidth: 720,
+        aspectHeight: 1280,
+      }}
+    />
   );
-  assert.ok(selectedHtml.includes('حفل تكريم المتفوقين'));
-  assert.ok(
-    selectedHtml.includes('يتضمن الحفل كلمة اللجنة وعرضاً مرئياً وتسجيلاً صوتياً للنشيد المدرسي.')
+  assert.match(portraitFbHtml, /data-orientation="portrait"/);
+  assert.match(portraitFbHtml, /aspect-ratio:\s*720\s*\/\s*1280/);
+  assert.match(portraitFbHtml, /max-width:\s*min\(100%,\s*calc\(78vh \* 720 \/ 1280\)\)/);
+
+  const ytShortsHtml = renderToStaticMarkup(
+    <ExternalMediaEmbed media="https://www.youtube.com/shorts/dQw4w9WgXcQ" />
   );
-  assert.match(selectedHtml, /<iframe[^>]+youtube-nocookie\.com\/embed\/dQw4w9WgXcQ/);
-  assert.match(selectedHtml, /<iframe[^>]+w\.soundcloud\.com\/player\/\?url=/);
-  assert.ok(selectedHtml.includes('العودة إلى قائمة الإعلانات'));
+  assert.match(ytShortsHtml, /data-orientation="portrait"/);
+  assert.match(ytShortsHtml, /aspect-ratio:\s*9\s*\/\s*16/);
+
+  const squareFbHtml = renderToStaticMarkup(
+    <ExternalMediaEmbed
+      media={{
+        canonicalUrl: 'https://www.facebook.com/watch/?v=111222333',
+        mediaType: 'video',
+        aspectWidth: 1080,
+        aspectHeight: 1080,
+      }}
+    />
+  );
+  assert.match(squareFbHtml, /data-orientation="square"/);
+  assert.match(squareFbHtml, /aspect-ratio:\s*1080\s*\/\s*1080/);
+
+  const landscapeHtml = renderToStaticMarkup(
+    <ExternalMediaEmbed media="https://www.youtube.com/watch?v=dQw4w9WgXcQ" />
+  );
+  assert.match(landscapeHtml, /data-orientation="landscape"/);
+  assert.match(landscapeHtml, /aspect-ratio:\s*16\s*\/\s*9/);
+
+  const landscapeReelHtml = renderToStaticMarkup(
+    <ExternalMediaEmbed
+      media={{
+        canonicalUrl: 'https://www.facebook.com/reel/1391452396433188',
+        mediaType: 'reel',
+        aspectWidth: 1280,
+        aspectHeight: 720,
+      }}
+    />
+  );
+  assert.match(landscapeReelHtml, /data-orientation="landscape"/);
+  assert.match(landscapeReelHtml, /aspect-ratio:\s*1280\s*\/\s*720/);
+  assert.match(landscapeReelHtml, /max-width:\s*100%/);
+});
+
+test('resolveExternalMediaEmbed and ExternalMediaEmbed support social reels, posts, external images, and audio across iframe, image, and card render modes', () => {
+  const cases = [
+    {
+      input: 'https://www.instagram.com/reel/C5AbCdEfGhI/',
+      mediaType: 'reel',
+      provider: 'instagram',
+      renderMode: 'iframe',
+      expectedEmbed: 'https://www.instagram.com/reel/C5AbCdEfGhI/embed/',
+    },
+    {
+      input: 'https://www.facebook.com/reel/123456789012345',
+      mediaType: 'reel',
+      provider: 'facebook',
+      renderMode: 'iframe',
+      expectedEmbed: 'https://www.facebook.com/plugins/video.php?href=',
+    },
+    {
+      input: 'https://www.facebook.com/mahjar.school/posts/pfbid02XYZ123',
+      mediaType: 'post',
+      provider: 'facebook',
+      renderMode: 'iframe',
+      expectedEmbed: 'https://www.facebook.com/plugins/post.php?href=',
+    },
+    {
+      input: 'https://www.facebook.com/share/v/19kinDFpk5/',
+      mediaType: 'video',
+      provider: 'facebook',
+      renderMode: 'card',
+      expectedEmbed: '',
+    },
+    {
+      input: {
+        canonicalUrl: 'https://www.facebook.com/watch/?v=987654321',
+        originalUrl: 'https://www.facebook.com/share/v/19kinDFpk5/',
+      },
+      mediaType: 'video',
+      provider: 'facebook',
+      renderMode: 'iframe',
+      expectedEmbed: 'https://www.facebook.com/plugins/video.php?href=',
+    },
+    {
+      input: 'https://www.tiktok.com/@mahjarschool/video/7345678901234567890',
+      mediaType: 'reel',
+      provider: 'tiktok',
+      renderMode: 'iframe',
+      expectedEmbed: 'https://www.tiktok.com/embed/v2/7345678901234567890',
+    },
+    {
+      input: 'https://open.spotify.com/episode/4rOoJ6Egrf8K2IrywzwOMk',
+      mediaType: 'audio',
+      provider: 'spotify',
+      renderMode: 'iframe',
+      expectedEmbed: 'https://open.spotify.com/embed/episode/4rOoJ6Egrf8K2IrywzwOMk',
+    },
+    {
+      input: 'https://www.dailymotion.com/video/x8abcde',
+      mediaType: 'video',
+      provider: 'dailymotion',
+      renderMode: 'iframe',
+      expectedEmbed: 'https://www.dailymotion.com/embed/video/x8abcde',
+    },
+    {
+      input: 'https://www.threads.net/@mahjar.school/post/C9AbCdEf123',
+      mediaType: 'post',
+      provider: 'threads',
+      renderMode: 'iframe',
+      expectedEmbed: 'https://www.threads.net/@mahjar.school/post/C9AbCdEf123/embed',
+    },
+    {
+      input: 'https://t.me/mahjar_parents/42',
+      mediaType: 'post',
+      provider: 'telegram',
+      renderMode: 'iframe',
+      expectedEmbed: 'https://t.me/mahjar_parents/42?embed=1',
+    },
+    {
+      input: 'https://www.linkedin.com/posts/mahjar-school_activity-12345',
+      mediaType: 'post',
+      provider: 'linkedin',
+      renderMode: 'iframe',
+      expectedEmbed: 'https://www.linkedin.com/embed/feed/update/urn:li:activity:12345',
+    },
+    {
+      input: 'https://www.canva.com/design/DAGAbCdEfGh/view',
+      mediaType: 'post',
+      provider: 'canva',
+      renderMode: 'iframe',
+      expectedEmbed: 'https://www.canva.com/design/DAGAbCdEfGh/view?embed',
+    },
+    {
+      input: 'https://x.com/mahjar_school/status/1800123456789012345',
+      mediaType: 'post',
+      provider: 'x',
+      renderMode: 'card',
+      expectedEmbed: '',
+    },
+    {
+      input: 'https://vm.tiktok.com/ZMrAbCdEf/',
+      mediaType: 'reel',
+      provider: 'tiktok',
+      renderMode: 'card',
+      expectedEmbed: '',
+    },
+    {
+      input: 'https://cdn.example.org/gallery/heritage-day.webp',
+      mediaType: 'image',
+      provider: 'external_image',
+      renderMode: 'image',
+      expectedEmbed: '',
+    },
+  ];
+
+  for (const c of cases) {
+    const resolved = resolveExternalMediaEmbed(c.input);
+    assert.ok(resolved, `Should resolve ${c.input}`);
+    assert.equal(resolved.mediaType, c.mediaType);
+    assert.equal(resolved.provider, c.provider);
+    assert.equal(resolved.renderMode, c.renderMode);
+
+    const html = renderToStaticMarkup(<ExternalMediaEmbed media={c.input} />);
+    assert.match(html, new RegExp(`data-render-mode="${c.renderMode}"`));
+    assert.match(html, new RegExp(`data-media-type="${c.mediaType}"`));
+    if (c.renderMode === 'iframe') {
+      assert.match(html, /<iframe\b/);
+      assert.ok(html.includes(c.expectedEmbed));
+    } else if (c.renderMode === 'image') {
+      assert.doesNotMatch(html, /<iframe\b/);
+      assert.match(html, /<img[^>]+loading="lazy"/);
+    } else {
+      assert.doesNotMatch(html, /<iframe\b|<video\b|<audio\b/);
+      assert.match(html, /class="media-embed__card"/);
+      assert.match(html, /<bdi dir="ltr">/);
+      assert.match(html, /min-height:\s*44px/);
+    }
+  }
+
+  // Deduplicates multiple card/image links without colliding on empty embedUrl
+  const { embeds } = extractPostMedia({
+    id: 90,
+    title: 'تغطية متعددة',
+    mediaLinks: [
+      { url: 'https://x.com/mahjar_school/status/1800123456789012345', embedUrl: '' },
+      { url: 'https://t.me/mahjar_parents/42', embedUrl: '' },
+      { url: 'https://cdn.example.org/gallery/photo1.webp', embedUrl: '' },
+    ],
+  });
+  assert.equal(embeds.length, 3);
+
+  // Security rejections for private/local/SVG external images
+  assert.equal(resolveExternalMediaEmbed('https://127.0.0.1/a.jpg'), null);
+  assert.equal(resolveExternalMediaEmbed('https://localhost/a.png', 'image'), null);
+  assert.equal(resolveExternalMediaEmbed('https://cdn.example.org/a.svg', 'image'), null);
 });
 
 test('Frontend source and public assets do not bundle heavy raw video or audio files into the hosting tier', () => {

@@ -156,6 +156,7 @@ DEFAULT_COMMITTEE_MEMBERS = [
     {
         "id": 3,
         "fullName": "طه علي اغباريه",
+        "isDirectContact": True,
         "phone": "0525308582",
         "email": "taha-igbaria@hotmail.com",
         "role": "أمين الصندوق ومسؤول التواصل مع الأهالي",
@@ -328,6 +329,9 @@ def _normalize_and_order_committee_members(records):
             or ""
         ).strip()
         phone = (raw.get("phone") or "").strip()
+        is_direct_contact = bool(
+            raw.get("isDirectContact", raw.get("is_direct_contact", False))
+        )
 
         explicit_order = raw.get("displayOrder", raw.get("display_order"))
         role_rank = _role_priority(role)
@@ -357,6 +361,8 @@ def _normalize_and_order_committee_members(records):
                     "avatar_url": avatar_url,
                     "email": email,
                     "phone": phone,
+                    "isDirectContact": is_direct_contact,
+                    "is_direct_contact": is_direct_contact,
                     "displayOrder": int(explicit_order)
                     if has_explicit_order
                     else None,
@@ -522,14 +528,28 @@ def _normalize_and_order_posts(records):
             legacy_val = (raw.get(legacy_key) or "").strip()
             if legacy_val:
                 raw_media_links.append({"url": legacy_val, "mediaType": legacy_type})
-        media_links = sanitize_external_media_links(raw_media_links)
+        media_links = sanitize_external_media_links(
+            raw_media_links,
+            resolve_redirects=_should_resolve_short_media_urls(),
+        )
+
+        raw_order = raw.get("displayOrder", raw.get("display_order"))
+        if isinstance(raw_order, int) and not isinstance(raw_order, bool) and raw_order >= 1:
+            display_order = raw_order
+        else:
+            display_order = None
 
         timestamp = _parse_iso_timestamp(published_at)
         numeric_id = int(post_id) if str(post_id).isdigit() else idx + 1
 
         normalized_items.append(
             (
-                (-timestamp, -numeric_id),
+                (
+                    0 if display_order is not None else 1,
+                    display_order if display_order is not None else 0,
+                    -timestamp,
+                    -numeric_id,
+                ),
                 {
                     "id": post_id,
                     "title": title,
@@ -541,6 +561,8 @@ def _normalize_and_order_posts(records):
                     "event_date": event_date,
                     "imageUrl": image_url,
                     "image_url": image_url,
+                    "displayOrder": display_order,
+                    "display_order": display_order,
                     "mediaLinks": media_links,
                 },
             )
@@ -607,6 +629,12 @@ def _format_committee_record(record: dict) -> dict:
         "avatar_url": record.get("avatarUrl", ""),
         "email": record.get("email", ""),
         "phone": record.get("phone", ""),
+        "isDirectContact": bool(
+            record.get("isDirectContact", record.get("is_direct_contact", False))
+        ),
+        "is_direct_contact": bool(
+            record.get("isDirectContact", record.get("is_direct_contact", False))
+        ),
         "displayOrder": display_order,
         "display_order": display_order,
     }
@@ -614,6 +642,7 @@ def _format_committee_record(record: dict) -> dict:
 
 def _format_post_record(record: dict) -> dict:
     """Format a post record with both camelCase and snake_case keys and media links."""
+    display_order = record.get("displayOrder", record.get("display_order"))
     return {
         "id": record["id"],
         "title": record.get("title", ""),
@@ -625,6 +654,8 @@ def _format_post_record(record: dict) -> dict:
         "event_date": record.get("eventDate", ""),
         "imageUrl": record.get("imageUrl", ""),
         "image_url": record.get("imageUrl", ""),
+        "displayOrder": display_order,
+        "display_order": display_order,
         "mediaLinks": record.get("mediaLinks", []),
     }
 
@@ -884,6 +915,20 @@ def _parse_committee_payload(payload: dict, partial: bool = False) -> dict:
     if not partial or "phone" in payload:
         record["phone"] = validate_phone(payload.get("phone"), "phone")
 
+    if "isDirectContact" in payload or "is_direct_contact" in payload:
+        raw_flag = (
+            payload.get("isDirectContact")
+            if "isDirectContact" in payload
+            else payload.get("is_direct_contact")
+        )
+        if not isinstance(raw_flag, bool):
+            raise CMSValidationError(
+                "isDirectContact must be a boolean.", field="isDirectContact"
+            )
+        record["isDirectContact"] = raw_flag
+    elif not partial:
+        record["isDirectContact"] = False
+
     if not partial or "avatarUrl" in payload or "avatar_url" in payload:
         raw_avatar = payload.get("avatarUrl") if "avatarUrl" in payload else payload.get("avatar_url")
         record["avatarUrl"] = validate_image_url(raw_avatar, "avatarUrl")
@@ -907,6 +952,14 @@ def _parse_committee_payload(payload: dict, partial: bool = False) -> dict:
     return record
 
 
+def _should_resolve_short_media_urls() -> bool:
+    if not has_app_context():
+        return False
+    if current_app.config.get("RESOLVE_SHORT_MEDIA_URLS"):
+        return True
+    return not bool(current_app.config.get("TESTING"))
+
+
 def _parse_media_link_entry(raw_item, default_type: str | None = None) -> dict:
     """Strictly validate and normalize a single external media link item."""
     if isinstance(raw_item, str):
@@ -916,6 +969,10 @@ def _parse_media_link_entry(raw_item, default_type: str | None = None) -> dict:
     elif isinstance(raw_item, dict):
         raw_url = (
             raw_item.get("url")
+            or raw_item.get("originalUrl")
+            or raw_item.get("original_url")
+            or raw_item.get("canonicalUrl")
+            or raw_item.get("canonical_url")
             or raw_item.get("embedUrl")
             or raw_item.get("embed_url")
             or ""
@@ -932,7 +989,11 @@ def _parse_media_link_entry(raw_item, default_type: str | None = None) -> dict:
             field="mediaLinks",
         )
 
-    normalized = validate_external_media_url(raw_url, media_type=requested_type)
+    normalized = validate_external_media_url(
+        raw_url,
+        media_type=requested_type,
+        resolve_redirects=_should_resolve_short_media_urls(),
+    )
     normalized["title"] = title
     return normalized
 
@@ -992,6 +1053,13 @@ def _parse_post_payload(payload: dict, partial: bool = False) -> tuple[dict, lis
         raw_image = payload.get("imageUrl") if "imageUrl" in payload else payload.get("image_url")
         record["imageUrl"] = validate_image_url(raw_image, "imageUrl")
 
+    if "displayOrder" in payload or "display_order" in payload:
+        raw_order = payload.get("displayOrder") if "displayOrder" in payload else payload.get("display_order")
+        if raw_order is None or raw_order == "":
+            record["displayOrder"] = None
+        else:
+            record["displayOrder"] = validate_positive_int_field(raw_order, "displayOrder")
+
     if "mediaLinks" in payload or "media_links" in payload:
         raw_links = payload.get("mediaLinks") if "mediaLinks" in payload else payload.get("media_links")
         if raw_links is None:
@@ -1044,12 +1112,27 @@ def _parse_media_link_payload(
     elif not partial:
         record["title"] = ""
 
-    has_url = any(k in payload for k in ("url", "embedUrl", "embed_url"))
+    has_url = any(
+        k in payload
+        for k in (
+            "url",
+            "originalUrl",
+            "original_url",
+            "canonicalUrl",
+            "canonical_url",
+            "embedUrl",
+            "embed_url",
+        )
+    )
     has_type = "mediaType" in payload or "media_type" in payload
     if not partial or has_url or has_type:
         if has_url:
             raw_url = (
                 payload.get("url")
+                or payload.get("originalUrl")
+                or payload.get("original_url")
+                or payload.get("canonicalUrl")
+                or payload.get("canonical_url")
                 or payload.get("embedUrl")
                 or payload.get("embed_url")
                 or ""
@@ -1072,7 +1155,11 @@ def _parse_media_link_payload(
             if "mediaType" in payload
             else payload.get("media_type")
         )
-        normalized = validate_external_media_url(raw_url, media_type=requested_type)
+        normalized = validate_external_media_url(
+            raw_url,
+            media_type=requested_type,
+            resolve_redirects=_should_resolve_short_media_urls(),
+        )
         record.update(normalized)
 
     if partial and not record:
@@ -1281,6 +1368,10 @@ def create_app(test_config=None):
         ),
         "HSTS_PRELOAD": parse_bool(_get_setting("MAHJAR_HSTS_PRELOAD"), default=False),
         "CORS_ALLOWED_ORIGINS": default_cors_origins,
+        "CORS_ALLOW_DEV_LAN_ORIGINS": parse_bool(
+            _get_setting("MAHJAR_CORS_ALLOW_DEV_LAN_ORIGINS"),
+            default=(not is_production and not is_testing and not bool(raw_cors_env)),
+        ),
         "CORS_ALLOW_INSECURE_ORIGINS": parse_bool(
             _get_setting("MAHJAR_CORS_ALLOW_INSECURE_ORIGINS"), default=False
         ),
@@ -1847,6 +1938,7 @@ def create_app(test_config=None):
             normalized = validate_external_media_url(
                 payload.get("url"),
                 media_type=payload.get("mediaType") or payload.get("media_type"),
+                resolve_redirects=_should_resolve_short_media_urls(),
             )
         except MediaValidationError as exc:
             return jsonify({"error": str(exc), "code": exc.code}), exc.status_code
@@ -2010,6 +2102,44 @@ def create_app(test_config=None):
             )
         clear_posts_cache()
         return jsonify({"deleted": True, "id": post_id}), 200
+
+    @flask_app.route("/api/admin/posts/reorder", methods=["PUT"])
+    @require_admin_auth
+    def admin_reorder_posts():
+        payload = _require_json_object()
+        raw_ids = payload.get("postIds") if "postIds" in payload else payload.get("post_ids")
+        if not isinstance(raw_ids, list) or len(raw_ids) == 0:
+            raise CMSValidationError(
+                "Field 'postIds' must be a non-empty list of post IDs.",
+                status_code=400,
+                code="VALIDATION_ERROR",
+                field="postIds",
+            )
+        validated_ids: list[int] = []
+        seen_ids: set[int] = set()
+        for item in raw_ids:
+            pid = validate_positive_int_field(item, "postIds")
+            if pid in seen_ids:
+                raise CMSValidationError(
+                    "Field 'postIds' must not contain duplicate IDs.",
+                    status_code=400,
+                    code="VALIDATION_ERROR",
+                    field="postIds",
+                )
+            seen_ids.add(pid)
+            validated_ids.append(pid)
+
+        reordered = _get_store().reorder_posts(validated_ids)
+        if reordered is None:
+            return (
+                jsonify({
+                    "error": "One or more post IDs were not found.",
+                    "code": "NOT_FOUND",
+                }),
+                404,
+            )
+        clear_posts_cache()
+        return jsonify(_normalize_and_order_posts(_get_store().list_posts())), 200
 
     # --- Media Links CRUD (Standalone & Post-Scoped) ---
 

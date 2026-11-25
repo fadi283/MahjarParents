@@ -59,15 +59,6 @@ export default function GoogleFormEmbed({ form, className = '', shareBaseUrl }) 
             entityType="form"
             baseUrl={shareBaseUrl}
           />
-          <a
-            href={resolved.directUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="engagement-embed__direct-link"
-            style={TOUCH_TARGET_STYLE}
-          >
-            فتح النموذج في نافذة جديدة
-          </a>
         </div>
       </div>
 

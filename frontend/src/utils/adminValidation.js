@@ -1,5 +1,9 @@
 import { CATEGORY_LABELS } from '../components/AnnouncementCard.jsx';
-import { resolveExternalMediaEmbed, sanitizeImageUrl } from './mediaEmbeds.js';
+import {
+  ALLOWED_EXTERNAL_MEDIA_TYPES,
+  resolveExternalMediaEmbed,
+  sanitizeImageUrl,
+} from './mediaEmbeds.js';
 
 export const ADMIN_POST_CATEGORY_OPTIONS = [
   { id: 'general', label: CATEGORY_LABELS.general },
@@ -301,6 +305,7 @@ export function validateCommitteeInput(input = {}) {
       phone: rawPhone,
       avatarUrl,
       displayOrder: orderCheck.value,
+      isDirectContact: input.isDirectContact === true,
     },
   };
 }
@@ -337,6 +342,48 @@ export function validatePostInput(input = {}) {
     }
   }
 
+  const candidateUrls = [];
+  if (Array.isArray(input.mediaLinks)) {
+    for (const item of input.mediaLinks) {
+      if (typeof item === 'string') {
+        const cleaned = item.trim();
+        if (cleaned) candidateUrls.push(cleaned);
+      } else if (item && typeof item === 'object') {
+        const cleaned = String(
+          item.url ||
+            item.canonicalUrl ||
+            item.canonical_url ||
+            item.originalUrl ||
+            item.original_url ||
+            item.embedUrl ||
+            item.embed_url ||
+            ''
+        ).trim();
+        if (cleaned) candidateUrls.push(cleaned);
+      }
+    }
+  } else if (typeof input.mediaLinks === 'string') {
+    const cleaned = input.mediaLinks.trim();
+    if (cleaned) candidateUrls.push(cleaned);
+  }
+
+  const mediaLinks = [];
+  const seenUrls = new Set();
+  for (const url of candidateUrls) {
+    if (!seenUrls.has(url)) {
+      seenUrls.add(url);
+      mediaLinks.push(url);
+    }
+  }
+
+  for (const url of mediaLinks) {
+    if (!resolveExternalMediaEmbed(url)) {
+      errors.mediaLinks =
+        'أحد روابط الوسائط غير صالح أو من نطاق غير معتمد. يرجى استخدام رابط HTTPS من المنصات المعتمدة (YouTube، Vimeo، Dailymotion، Instagram، Facebook، TikTok، X، Threads، LinkedIn، Telegram، SoundCloud، Spotify، Google Drive، Google Photos، Canva) أو رابط صورة خارجية آمنة.';
+      break;
+    }
+  }
+
   return {
     valid: Object.keys(errors).length === 0,
     errors,
@@ -346,6 +393,7 @@ export function validatePostInput(input = {}) {
       category,
       eventDate: rawEventDate,
       imageUrl,
+      mediaLinks,
     },
   };
 }
@@ -360,14 +408,15 @@ export function validateMediaLinkInput(input = {}) {
     errors.title = 'عنوان الرابط يجب ألا يتجاوز 160 حرفاً.';
   }
 
-  if (rawType && rawType !== 'video' && rawType !== 'audio') {
-    errors.mediaType = 'نوع الوسائط يجب أن يكون فيديو أو صوت.';
+  if (rawType && !ALLOWED_EXTERNAL_MEDIA_TYPES.includes(rawType)) {
+    errors.mediaType =
+      'نوع الوسائط يجب أن يكون فيديو أو رييل أو منشور أو صورة أو صوت.';
   }
 
   const resolved = rawUrl ? resolveExternalMediaEmbed(rawUrl, rawType || null) : null;
   if (!rawUrl || !resolved) {
     errors.url =
-      'يرجى إدخال رابط HTTPS صالح من المنصات المعتمدة فقط (YouTube، Vimeo، SoundCloud، Google Drive) ومتوافق مع النوع المحدد.';
+      'يرجى إدخال رابط HTTPS صالح من المنصات المعتمدة (YouTube، Vimeo، Dailymotion، Instagram، Facebook، TikTok، X، Threads، LinkedIn، Telegram، SoundCloud، Spotify، Google Drive، Google Photos، Canva) أو رابط صورة خارجية آمنة متوافق مع النوع المحدد.';
   }
 
   const postCheck = parsePositiveIntOrNull(input.postId);

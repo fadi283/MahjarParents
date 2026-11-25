@@ -567,6 +567,69 @@ class TestAdminMediaLinksCRUD:
             == 404
         )
 
+    def test_supports_social_reels_posts_and_external_images_crud(
+        self, client, admin_auth_headers
+    ):
+        reel_resp = client.post(
+            "/api/admin/posts/1/media-links",
+            headers=admin_auth_headers,
+            json={
+                "url": "https://www.instagram.com/reel/C5AbCdEfGhI/",
+                "title": "رييل يوم التراث",
+            },
+        )
+        assert reel_resp.status_code == 201
+        reel = reel_resp.get_json()
+        assert reel["mediaType"] == "reel"
+        assert reel["provider"] == "instagram"
+        assert reel["renderMode"] == "iframe"
+
+        x_resp = client.post(
+            "/api/admin/media-links",
+            headers=admin_auth_headers,
+            json={
+                "url": "https://x.com/mahjar_school/status/1800123456789012345",
+                "postId": 1,
+                "title": "تغريدة التغطية",
+            },
+        )
+        assert x_resp.status_code == 201
+        x_link = x_resp.get_json()
+        assert x_link["mediaType"] == "post"
+        assert x_link["provider"] == "x"
+        assert x_link["renderMode"] == "card"
+
+        img_resp = client.post(
+            "/api/admin/media-links",
+            headers=admin_auth_headers,
+            json={
+                "url": "https://cdn.example.org/gallery/school-yard.webp",
+                "mediaType": "image",
+                "postId": 1,
+                "title": "صورة الساحة",
+            },
+        )
+        assert img_resp.status_code == 201
+        img_link = img_resp.get_json()
+        assert img_link["mediaType"] == "image"
+        assert img_link["provider"] == "external_image"
+        assert img_link["renderMode"] == "image"
+
+        # Update X post title without losing card renderMode or canonicalUrl
+        upd_resp = client.put(
+            f"/api/admin/media-links/{x_link['id']}",
+            headers=admin_auth_headers,
+            json={"title": "منشور إكس محدّث"},
+        )
+        assert upd_resp.status_code == 200
+        assert upd_resp.get_json()["renderMode"] == "card"
+        assert upd_resp.get_json()["title"] == "منشور إكس محدّث"
+
+        posts = client.get("/api/posts").get_json()
+        post1 = next(p for p in posts if p["id"] == 1)
+        providers = {m["provider"] for m in post1["mediaLinks"]}
+        assert {"instagram", "x", "external_image"}.issubset(providers)
+
 
 @pytest.mark.api
 class TestAdminGoogleFormsCRUD:
@@ -787,3 +850,84 @@ class TestCMSPersistenceAcrossRestarts:
 
             forms = c2.get("/api/admin/forms", headers=headers2).get_json()
             assert any(f["id"] == form_id and f["title"] == "نموذج مستمر" for f in forms)
+
+
+@pytest.mark.api
+class TestAdminPostsReordering:
+    """Verify persistent admin post reordering across JSON and SQLite backends."""
+
+    @pytest.mark.parametrize("backend_mode", ["json", "sqlite"])
+    def test_reorder_posts_requires_auth_validates_ids_and_persists(
+        self, tmp_path, admin_credentials, backend_mode
+    ):
+        config = {
+            "TESTING": True,
+            "SECRET_KEY": f"reorder-{backend_mode}-secret",
+            "ADMIN_USERNAME": admin_credentials["username"],
+            "ADMIN_PASSWORD": admin_credentials["password"],
+        }
+        if backend_mode == "sqlite":
+            config["STORAGE_BACKEND"] = "sqlite"
+            config["CMS_DATA_FILE"] = str(tmp_path / "cms.db")
+        else:
+            config["CMS_DATA_FILE"] = str(tmp_path / "cms.json")
+
+        app1 = backend_app.create_app(config)
+        with app1.test_client() as client:
+            assert (
+                client.put("/api/admin/posts/reorder", json={"postIds": [1, 2]}).status_code
+                == 401
+            )
+            token = client.post("/api/admin/auth/login", json=admin_credentials).get_json()["token"]
+            headers = {"Authorization": f"Bearer {token}"}
+
+            initial_ids = [p["id"] for p in client.get("/api/admin/posts", headers=headers).get_json()]
+            reversed_ids = list(reversed(initial_ids))
+
+            assert (
+                client.put("/api/admin/posts/reorder", headers=headers, json={"postIds": []}).status_code
+                == 400
+            )
+            assert (
+                client.put(
+                    "/api/admin/posts/reorder",
+                    headers=headers,
+                    json={"postIds": [initial_ids[0], initial_ids[0]]},
+                ).status_code
+                == 400
+            )
+            assert (
+                client.put(
+                    "/api/admin/posts/reorder",
+                    headers=headers,
+                    json={"postIds": [99999]},
+                ).status_code
+                == 404
+            )
+
+            reorder_resp = client.put(
+                "/api/admin/posts/reorder",
+                headers=headers,
+                json={"postIds": reversed_ids},
+            )
+            assert reorder_resp.status_code == 200
+            assert [p["id"] for p in reorder_resp.get_json()] == reversed_ids
+
+            public_ids = [p["id"] for p in client.get("/api/posts").get_json()]
+            assert public_ids == reversed_ids
+
+            # Creating a new post puts it at the top (displayOrder=1) while keeping reordered relatives
+            create_resp = client.post(
+                "/api/admin/posts",
+                headers=headers,
+                json={"title": "إعلان جديد أعلى القائمة", "summary": "ملخص جديد", "category": "general"},
+            )
+            assert create_resp.status_code == 201
+            new_post_id = create_resp.get_json()["id"]
+            assert create_resp.get_json()["displayOrder"] == 1
+
+        backend_app.clear_posts_cache()
+        app2 = backend_app.create_app(config)
+        with app2.test_client() as client2:
+            persisted_ids = [p["id"] for p in client2.get("/api/posts").get_json()]
+            assert persisted_ids == [new_post_id, *reversed_ids]
