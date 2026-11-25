@@ -496,12 +496,14 @@ test('EngagementSection respects initialSelectedFormId and initialFormType and s
 
 // 6. App integration
 test('App integrates EngagementSection alongside AnnouncementsFeed and CommitteeDirectory and hydrates/syncs /api/forms', () => {
-  const defaultHtml = renderToStaticMarkup(<App />);
+  const defaultHtml = renderToStaticMarkup(<App initialPage="engagement" />);
   assert.match(defaultHtml, /dir="rtl"/);
   assert.match(defaultHtml, /id="engagement-section"/);
-  assert.ok(defaultHtml.includes('لوحة الإعلانات والفعاليات'));
-  assert.ok(defaultHtml.includes('أعضاء لجنة أولياء الأمور'));
-  assert.match(defaultHtml, /href="#engagement-section"/);
+  assert.match(defaultHtml, /href="#announcements"/);
+  assert.match(defaultHtml, /href="#engagement"/);
+  assert.match(defaultHtml, /href="#committee"/);
+  assert.ok(!defaultHtml.includes('id="announcements-feed"'), 'only one page renders at a time');
+  assert.ok(!defaultHtml.includes('id="committee-directory-heading"'), 'only one page renders at a time');
   assert.match(
     defaultHtml,
     /<iframe[^>]+loading="lazy"[^>]+https:\/\/docs\.google\.com\/forms\//
@@ -509,6 +511,7 @@ test('App integrates EngagementSection alongside AnnouncementsFeed and Committee
 
   const customFormsHtml = renderToStaticMarkup(
     <App
+      initialPage="engagement"
       forms={[
         {
           id: 91,

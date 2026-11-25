@@ -2,14 +2,23 @@ import React, { useCallback, useEffect, useState } from 'react';
 import AnnouncementsFeed from './components/AnnouncementsFeed.jsx';
 import CommitteeDirectory from './components/CommitteeDirectory.jsx';
 import EngagementSection from './components/EngagementSection.jsx';
+import SiteNav, { PAGES } from './components/SiteNav.jsx';
 import AdminDashboard from './components/admin/AdminDashboard.jsx';
-import { TOUCH_TARGET_STYLE } from './components/admin/adminShared.jsx';
 import { defaultAnnouncementsPosts } from './data/announcementsPosts.js';
 import { defaultCommitteeMembers } from './data/committeeMembers.js';
 import { defaultEngagementForms } from './data/engagementForms.js';
 import { API_BASE_URL, buildApiUrl } from './utils/apiConfig.js';
 import { enforceDocumentRtl, RTL_ROOT_ATTRIBUTES } from './utils/rtlLayout.js';
 import './styles.css';
+
+const PAGE_IDS = PAGES.map((p) => p.id);
+const DEFAULT_PAGE = PAGE_IDS[0];
+
+function resolvePageFromHash() {
+  if (typeof window === 'undefined') return DEFAULT_PAGE;
+  const hash = window.location.hash.replace(/^#\/?/, '');
+  return PAGE_IDS.includes(hash) ? hash : DEFAULT_PAGE;
+}
 
 function resolveInitialView(explicitView) {
   if (explicitView === 'admin' || explicitView === 'public') {
@@ -28,9 +37,13 @@ export default function App({
   posts = defaultAnnouncementsPosts,
   forms = defaultEngagementForms,
   initialView,
+  initialPage,
   adminProps = {},
 }) {
   const [view, setView] = useState(() => resolveInitialView(initialView));
+  const [page, setPage] = useState(() =>
+    PAGE_IDS.includes(initialPage) ? initialPage : resolvePageFromHash()
+  );
   const [liveMembers, setLiveMembers] = useState(members);
   const [livePosts, setLivePosts] = useState(posts);
   const [liveForms, setLiveForms] = useState(forms);
@@ -56,6 +69,7 @@ export default function App({
 
     const syncFromLocation = () => {
       if (initialView) return;
+      setPage(resolvePageFromHash());
       if (window.location.pathname === '/admin' || window.location.hash === '#admin') {
         setView('admin');
       } else {
@@ -144,11 +158,20 @@ export default function App({
         if (window.location.hash !== '#admin') {
           window.history.pushState(null, '', '#admin');
         }
-      } else if (window.location.hash === '#admin') {
-        window.history.pushState(null, '', window.location.pathname || '/');
-      } else if (window.location.pathname === '/admin') {
-        window.history.pushState(null, '', '/');
+      } else if (window.location.hash === '#admin' || window.location.pathname === '/admin') {
+        window.history.pushState(null, '', `${window.location.pathname === '/admin' ? '/' : window.location.pathname}#${page}`);
       }
+    }
+  };
+
+  const navigatePage = (nextPage) => {
+    setView('public');
+    setPage(nextPage);
+    if (typeof window !== 'undefined') {
+      if (!initialView && window.location.hash !== `#${nextPage}`) {
+        window.history.pushState(null, '', `#${nextPage}`);
+      }
+      window.scrollTo?.({ top: 0 });
     }
   };
 
@@ -169,43 +192,13 @@ export default function App({
       <header className="app-header">
         <div className="app-header__inner app-header__brand">
           <div className="app-header__text">
-            <span className="app-header__badge">مدرسة المحجر الابتدائية</span>
+            <span className="app-header__badge">مدرسة المحجر الابتدائية - أم الفحم</span>
             <h1 className="app-header__title">
-              لجنة أولياء أمور الطلاب – مدرسة المحجر الابتدائية
+              لجنة أولياء أمور الطلاب
             </h1>
             <p className="app-header__subtitle">
               المنصة الرقمية للتواصل المجتمعي والشراكة التربوية مع الأهالي
             </p>
-            <nav className="app-header__nav" aria-label="التنقل السريع">
-              {view === 'admin' ? (
-                <button
-                  type="button"
-                  className="app-header__admin-btn"
-                  style={TOUCH_TARGET_STYLE}
-                  onClick={() => navigateTo('public')}
-                >
-                  العودة إلى المنصة العامة
-                </button>
-              ) : (
-                <>
-                  <a
-                    href="#engagement-section"
-                    className="app-header__quick-link"
-                    style={TOUCH_TARGET_STYLE}
-                  >
-                    التفاعل والنماذج
-                  </a>
-                  <button
-                    type="button"
-                    className="app-header__admin-btn"
-                    style={TOUCH_TARGET_STYLE}
-                    onClick={() => navigateTo('admin')}
-                  >
-                    لوحة الإدارة
-                  </button>
-                </>
-              )}
-            </nav>
           </div>
           <div className="app-header__logo-wrapper">
             <img
@@ -219,6 +212,14 @@ export default function App({
         </div>
       </header>
 
+      <SiteNav
+        view={view}
+        currentPage={page}
+        onNavigate={navigatePage}
+        onOpenAdmin={() => navigateTo('admin')}
+        onExitAdmin={() => navigateTo('public')}
+      />
+
       <div className="app-content">
         {view === 'admin' ? (
           <AdminDashboard
@@ -228,9 +229,9 @@ export default function App({
           />
         ) : (
           <>
-            <AnnouncementsFeed posts={livePosts} />
-            <EngagementSection forms={liveForms} />
-            <CommitteeDirectory members={liveMembers} />
+            {page === 'announcements' && <AnnouncementsFeed posts={livePosts} />}
+            {page === 'engagement' && <EngagementSection forms={liveForms} />}
+            {page === 'committee' && <CommitteeDirectory members={liveMembers} />}
           </>
         )}
       </div>

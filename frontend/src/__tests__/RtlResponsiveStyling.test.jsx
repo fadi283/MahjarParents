@@ -176,7 +176,7 @@ test('App enforces root dir="rtl" lang="ar", semantic nav landmark, and runtime 
     appHtml,
     /<main[^>]+dir="rtl"[^>]+lang="ar"|<main[^>]+lang="ar"[^>]+dir="rtl"/
   );
-  assert.match(appHtml, /<nav[^>]+class="app-header__nav"/);
+  assert.match(appHtml, /<nav[^>]+class="site-nav"[^>]+aria-label="التنقل الرئيسي"/);
 
   const appSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/App.jsx'), 'utf-8');
   const mainSrc = fs.readFileSync(path.resolve(process.cwd(), 'src/main.jsx'), 'utf-8');

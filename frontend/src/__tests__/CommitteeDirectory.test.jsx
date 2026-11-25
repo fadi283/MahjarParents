@@ -108,7 +108,7 @@ test('CommitteeDirectory handles empty state gracefully when members array is em
 });
 
 test('App renders the CommitteeDirectory with default committee members in RTL layout', () => {
-  const html = renderToStaticMarkup(<App />);
+  const html = renderToStaticMarkup(<App initialPage="committee" />);
 
   assert.match(html, /dir="rtl"/, 'App root must enforce RTL');
   assert.ok(html.includes('لجنة أولياء أمور الطلاب'), 'App header should be rendered');

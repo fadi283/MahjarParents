@@ -110,9 +110,6 @@ export default function EngagementSection({
     >
       <div className="engagement-section__header">
         <div className="engagement-section__title-group">
-          <span className="engagement-section__zero-login">
-            تفاعل مباشر • بدون تسجيل دخول
-          </span>
           <h2 id="engagement-section-heading" className="engagement-section__title">
             التواصل والتفاعل مع اللجنة
           </h2>
@@ -132,9 +129,8 @@ export default function EngagementSection({
               <button
                 key={typeOption.id}
                 type="button"
-                className={`engagement-section__filter-btn ${
-                  isActive ? 'engagement-section__filter-btn--active' : ''
-                }`}
+                className={`engagement-section__filter-btn ${isActive ? 'engagement-section__filter-btn--active' : ''
+                  }`}
                 style={TOUCH_TARGET_STYLE}
                 aria-pressed={isActive ? 'true' : 'false'}
                 data-form-type={typeOption.id}
@@ -167,9 +163,8 @@ export default function EngagementSection({
                   id={`form-${String(form.id).trim()}`}
                   dir="rtl"
                   role="listitem"
-                  className={`engagement-card ${
-                    isSelected ? 'engagement-card--active' : ''
-                  }`}
+                  className={`engagement-card ${isSelected ? 'engagement-card--active' : ''
+                    }`}
                 >
                   <div className="engagement-card__top">
                     <span
@@ -190,9 +185,8 @@ export default function EngagementSection({
                   <div className="engagement-card__actions">
                     <button
                       type="button"
-                      className={`engagement-card__select-btn ${
-                        isSelected ? 'engagement-card__select-btn--active' : ''
-                      }`}
+                      className={`engagement-card__select-btn ${isSelected ? 'engagement-card__select-btn--active' : ''
+                        }`}
                       style={TOUCH_TARGET_STYLE}
                       aria-pressed={isSelected ? 'true' : 'false'}
                       onClick={() => handleSelectForm(form)}
