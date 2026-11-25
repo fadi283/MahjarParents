@@ -78,16 +78,6 @@ export default function AnnouncementCard({
       className={`announcement-card announcement-card--${category}`}
       aria-label={`${title} - ${categoryLabel}`}
     >
-      {safeImageUrl && (
-        <div className="announcement-card__media">
-          <LazyMediaImage
-            src={safeImageUrl}
-            alt={title}
-            className="announcement-card__image"
-          />
-        </div>
-      )}
-
       <div className="announcement-card__body">
         <div className="announcement-card__meta">
           <span
@@ -114,6 +104,16 @@ export default function AnnouncementCard({
           <div className="announcement-card__event-date">
             <span className="announcement-card__event-label">موعد الفعالية:</span>{' '}
             <time dateTime={eventDate}>{formattedEventDate}</time>
+          </div>
+        )}
+
+        {safeImageUrl && (
+          <div className="announcement-card__media">
+            <LazyMediaImage
+              src={safeImageUrl}
+              alt={title}
+              className="announcement-card__image"
+            />
           </div>
         )}
 

@@ -265,8 +265,7 @@ textarea:focus-visible {
   overflow: hidden;
   display: flex;
   justify-content: center;
-  border-top-left-radius: var(--radius-card);
-  border-top-right-radius: var(--radius-card);
+  border-radius: 12px;
 }
 
 .announcement-card__image {
