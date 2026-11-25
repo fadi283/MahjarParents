@@ -1,6 +1,11 @@
 import React, { useState } from 'react';
 import { validateCommitteeInput } from '../../utils/adminValidation.js';
-import { FieldError, ItemRowActions, TOUCH_TARGET_STYLE } from './adminShared.jsx';
+import {
+  FieldError,
+  ItemRowActions,
+  TOUCH_TARGET_STYLE,
+  useDragReorder,
+} from './adminShared.jsx';
 
 function buildCommitteeFormState(item = null) {
   return {
@@ -12,12 +17,6 @@ function buildCommitteeFormState(item = null) {
     phone: item?.phone ?? '',
     isDirectContact: Boolean(item?.isDirectContact ?? item?.is_direct_contact),
     avatarUrl: item?.avatarUrl ?? item?.avatar_url ?? '',
-    displayOrder:
-      item?.displayOrder !== null && item?.displayOrder !== undefined
-        ? String(item.displayOrder)
-        : item?.display_order !== null && item?.display_order !== undefined
-          ? String(item.display_order)
-          : '',
   };
 }
 
@@ -26,6 +25,7 @@ export default function CommitteeAdminPanel({
   onCreate,
   onUpdate,
   onDelete,
+  onReorder,
   onUploadImage,
   isBusy = false,
   initialEditingItem = null,
@@ -37,6 +37,12 @@ export default function CommitteeAdminPanel({
   const [fieldErrors, setFieldErrors] = useState({});
   const [uploadStatus, setUploadStatus] = useState('');
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const drag = useDragReorder({
+    items: members,
+    isBusy,
+    onReorder,
+    dataAttribute: 'data-member-id',
+  });
 
   const isEditing = editingId !== null && editingId !== undefined;
 
@@ -229,24 +235,6 @@ export default function CommitteeAdminPanel({
                 </div>
               )}
             </div>
-
-            <div className="admin-field">
-              <label htmlFor="committee-order" className="admin-field__label">
-                ترتيب العرض (اختياري)
-              </label>
-              <input
-                id="committee-order"
-                type="number"
-                min="1"
-                step="1"
-                dir="ltr"
-                className="admin-input"
-                value={formState.displayOrder}
-                onChange={(e) => handleFieldChange('displayOrder', e.target.value)}
-                disabled={isBusy}
-              />
-              <FieldError message={fieldErrors.displayOrder} />
-            </div>
           </div>
 
           <div className="admin-field">
@@ -305,6 +293,11 @@ export default function CommitteeAdminPanel({
         <h4 className="admin-list-section__title">
           قائمة أعضاء اللجنة ({members.length})
         </h4>
+        {members.length > 1 && (
+          <p className="admin-list-section__hint">
+            اسحب عضو اللجنة وأفلته لتغيير ترتيبه في دليل اللجنة.
+          </p>
+        )}
         {members.length === 0 ? (
           <div className="admin-empty" role="status">
             لا يوجد أعضاء مسجلون في اللجنة حالياً.
@@ -316,28 +309,59 @@ export default function CommitteeAdminPanel({
               const role = member.role ?? member.title ?? '';
               const summary =
                 member.responsibilitySummary ?? member.responsibility_summary ?? '';
+              const { isDraggable, className } = drag.getItemDragState(member.id);
               return (
-                <article key={member.id} className="admin-item" role="listitem">
-                  <div className="admin-item__body">
-                    <div className="admin-item__top">
-                      <strong className="admin-item__title">{name}</strong>
-                      <span className="admin-badge">{role}</span>
-                      {(member.isDirectContact ?? member.is_direct_contact) && (
-                        <span className="admin-badge">جهة اتصال مباشرة</span>
-                      )}
-                    </div>
-                    {summary && <p className="admin-item__desc">{summary}</p>}
-                    <div className="admin-item__meta">
-                      {member.email && (
-                        <span>
-                          البريد: <bdi dir="ltr">{member.email}</bdi>
-                        </span>
-                      )}
-                      {member.phone && (
-                        <span>
-                          الهاتف: <bdi dir="ltr">{member.phone}</bdi>
-                        </span>
-                      )}
+                <article
+                  key={member.id}
+                  className={className}
+                  role="listitem"
+                  draggable={isDraggable}
+                  data-member-id={member.id}
+                  onDragStart={(e) => drag.handleDragStart(e, member.id)}
+                  onDragOver={(e) => drag.handleDragOver(e, member.id)}
+                  onDragEnter={(e) => drag.handleDragOver(e, member.id)}
+                  onDrop={(e) => drag.handleDrop(e, member.id)}
+                  onDragEnd={drag.handleDragEnd}
+                >
+                  <div className="admin-item__row">
+                    {members.length > 1 && (
+                      <span
+                        className="admin-drag-handle"
+                        role="button"
+                        tabIndex={0}
+                        style={{ ...TOUCH_TARGET_STYLE, touchAction: 'none' }}
+                        title="اسحب لتغيير الترتيب"
+                        aria-label={`اسحب لتغيير ترتيب عضو اللجنة ${name}`}
+                        onKeyDown={(e) => drag.handleKeyDown(e, member.id)}
+                        onTouchStart={() => drag.handleTouchStart(member.id)}
+                        onTouchMove={drag.handleTouchMove}
+                        onTouchEnd={drag.handleTouchEnd}
+                        onTouchCancel={drag.handleTouchCancel}
+                      >
+                        ⋮⋮
+                      </span>
+                    )}
+                    <div className="admin-item__body">
+                      <div className="admin-item__top">
+                        <strong className="admin-item__title">{name}</strong>
+                        <span className="admin-badge">{role}</span>
+                        {(member.isDirectContact ?? member.is_direct_contact) && (
+                          <span className="admin-badge">جهة اتصال مباشرة</span>
+                        )}
+                      </div>
+                      {summary && <p className="admin-item__desc">{summary}</p>}
+                      <div className="admin-item__meta">
+                        {member.email && (
+                          <span>
+                            البريد: <bdi dir="ltr">{member.email}</bdi>
+                          </span>
+                        )}
+                        {member.phone && (
+                          <span>
+                            الهاتف: <bdi dir="ltr">{member.phone}</bdi>
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <ItemRowActions

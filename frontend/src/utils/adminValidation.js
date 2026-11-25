@@ -289,24 +289,33 @@ export function validateCommitteeInput(input = {}) {
     }
   }
 
-  const orderCheck = parsePositiveIntOrNull(input.displayOrder);
+  const hasDisplayOrder =
+    Object.prototype.hasOwnProperty.call(input, 'displayOrder') &&
+    input.displayOrder !== undefined;
+  const orderCheck = hasDisplayOrder
+    ? parsePositiveIntOrNull(input.displayOrder)
+    : { valid: true, value: undefined };
   if (!orderCheck.valid) {
     errors.displayOrder = 'ترتيب العرض يجب أن يكون رقماً صحيحاً موجباً (1 فأكثر).';
+  }
+
+  const payload = {
+    fullName,
+    role,
+    responsibilitySummary,
+    email: rawEmail,
+    phone: rawPhone,
+    avatarUrl,
+    isDirectContact: input.isDirectContact === true,
+  };
+  if (hasDisplayOrder) {
+    payload.displayOrder = orderCheck.value;
   }
 
   return {
     valid: Object.keys(errors).length === 0,
     errors,
-    payload: {
-      fullName,
-      role,
-      responsibilitySummary,
-      email: rawEmail,
-      phone: rawPhone,
-      avatarUrl,
-      displayOrder: orderCheck.value,
-      isDirectContact: input.isDirectContact === true,
-    },
+    payload,
   };
 }
 
@@ -466,21 +475,30 @@ export function validateGoogleFormInput(input = {}) {
     errors.active = 'حالة التفعيل يجب أن تكون قيمة منطقية صحيحة.';
   }
 
-  const orderCheck = parsePositiveIntOrNull(input.displayOrder);
+  const hasDisplayOrder =
+    Object.prototype.hasOwnProperty.call(input, 'displayOrder') &&
+    input.displayOrder !== undefined;
+  const orderCheck = hasDisplayOrder
+    ? parsePositiveIntOrNull(input.displayOrder)
+    : { valid: true, value: undefined };
   if (!orderCheck.valid) {
     errors.displayOrder = 'ترتيب العرض يجب أن يكون رقماً صحيحاً موجباً (1 فأكثر).';
+  }
+
+  const payload = {
+    formType,
+    title,
+    description,
+    embedUrl: urlCheck.valid ? urlCheck.embedUrl : '',
+    active: input.active,
+  };
+  if (hasDisplayOrder) {
+    payload.displayOrder = orderCheck.value;
   }
 
   return {
     valid: Object.keys(errors).length === 0,
     errors,
-    payload: {
-      formType,
-      title,
-      description,
-      embedUrl: urlCheck.valid ? urlCheck.embedUrl : '',
-      active: input.active,
-      displayOrder: orderCheck.value,
-    },
+    payload,
   };
 }

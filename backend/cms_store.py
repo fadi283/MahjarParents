@@ -206,6 +206,16 @@ class CMSStore:
     def create_committee_member(self, record: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             entry = copy.deepcopy(record)
+            if entry.get("displayOrder") is None:
+                existing_orders = [
+                    int(m["displayOrder"])
+                    for m in self._data["committee"]
+                    if isinstance(m.get("displayOrder"), int)
+                    and not isinstance(m.get("displayOrder"), bool)
+                ]
+                entry["displayOrder"] = (
+                    max(existing_orders + [len(self._data["committee"])]) + 1
+                )
             entry["id"] = self._allocate_id("committee")
             self._data["committee"].append(entry)
             self._persist()
@@ -232,6 +242,23 @@ class CMSStore:
                 return False
             self._persist()
             return True
+
+    def reorder_committee(self, ordered_ids: list[int]) -> list[dict[str, Any]] | None:
+        with self._lock:
+            by_id = {int(member["id"]): member for member in self._data["committee"]}
+            for mid in ordered_ids:
+                if int(mid) not in by_id:
+                    return None
+            seen_ids = {int(mid) for mid in ordered_ids}
+            ordered_members = [by_id[int(mid)] for mid in ordered_ids] + [
+                member
+                for member in self._data["committee"]
+                if int(member["id"]) not in seen_ids
+            ]
+            for order_idx, member in enumerate(ordered_members, start=1):
+                member["displayOrder"] = order_idx
+            self._persist()
+            return copy.deepcopy(ordered_members)
 
     # --- Posts CRUD ---
 
@@ -385,6 +412,12 @@ class CMSStore:
     def create_form(self, record: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             entry = copy.deepcopy(record)
+            if entry.get("displayOrder") is None:
+                for existing_form in self._data["forms"]:
+                    raw_order = existing_form.get("displayOrder")
+                    if isinstance(raw_order, int) and not isinstance(raw_order, bool):
+                        existing_form["displayOrder"] = int(raw_order) + 1
+                entry["displayOrder"] = 1
             entry["id"] = self._allocate_id("forms")
             self._data["forms"].append(entry)
             self._persist()
@@ -411,6 +444,24 @@ class CMSStore:
                 return False
             self._persist()
             return True
+
+    def reorder_forms(self, ordered_ids: list[int]) -> list[dict[str, Any]] | None:
+        with self._lock:
+            current_forms = self.list_forms()
+            by_id = {int(form["id"]): form for form in self._data["forms"]}
+            for fid in ordered_ids:
+                if int(fid) not in by_id:
+                    return None
+            seen_ids = {int(fid) for fid in ordered_ids}
+            ordered_forms = [by_id[int(fid)] for fid in ordered_ids] + [
+                by_id[int(form["id"])]
+                for form in current_forms
+                if int(form["id"]) not in seen_ids
+            ]
+            for order_idx, form in enumerate(ordered_forms, start=1):
+                form["displayOrder"] = order_idx
+            self._persist()
+            return self.list_forms()
 
     def export_snapshot(self) -> dict[str, Any]:
         """Return a deep-copied snapshot of all collections and sequence counters."""
@@ -859,6 +910,14 @@ class SQLiteCMSStore:
     def create_committee_member(self, record: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             with self._conn:
+                display_order = record.get("displayOrder")
+                if display_order is None:
+                    row = self._conn.execute(
+                        "SELECT MAX(display_order) AS max_order, COUNT(*) AS cnt FROM committee"
+                    ).fetchone()
+                    max_order = int(row["max_order"] or 0) if row is not None else 0
+                    cnt = int(row["cnt"] or 0) if row is not None else 0
+                    display_order = max(max_order, cnt) + 1
                 member_id = self._allocate_id("committee")
                 self._conn.execute(
                     """
@@ -875,7 +934,7 @@ class SQLiteCMSStore:
                         record.get("email", ""),
                         record.get("phone", ""),
                         record.get("avatarUrl", ""),
-                        record.get("displayOrder"),
+                        display_order,
                         1 if record.get("isDirectContact") else 0,
                     ),
                 )
@@ -919,6 +978,29 @@ class SQLiteCMSStore:
                     "DELETE FROM committee WHERE id = ?", (member_id,)
                 )
                 return cur.rowcount > 0
+
+    def reorder_committee(self, ordered_ids: list[int]) -> list[dict[str, Any]] | None:
+        with self._lock:
+            existing_rows = self._conn.execute(
+                "SELECT id FROM committee ORDER BY COALESCE(display_order, 9999) ASC, id ASC"
+            ).fetchall()
+            existing_ids = [int(row["id"]) for row in existing_rows]
+            existing_set = set(existing_ids)
+            for mid in ordered_ids:
+                if int(mid) not in existing_set:
+                    return None
+            normalized_ids = [int(mid) for mid in ordered_ids]
+            seen = set(normalized_ids)
+            full_ids = normalized_ids + [
+                mid for mid in existing_ids if mid not in seen
+            ]
+            with self._conn:
+                for order_idx, mid in enumerate(full_ids, start=1):
+                    self._conn.execute(
+                        "UPDATE committee SET display_order = ? WHERE id = ?",
+                        (order_idx, mid),
+                    )
+            return self.list_committee()
 
     # --- Posts CRUD ---
 
@@ -1168,6 +1250,12 @@ class SQLiteCMSStore:
     def create_form(self, record: dict[str, Any]) -> dict[str, Any]:
         with self._lock:
             with self._conn:
+                display_order = record.get("displayOrder")
+                if display_order is None:
+                    self._conn.execute(
+                        "UPDATE forms SET display_order = display_order + 1 WHERE display_order IS NOT NULL"
+                    )
+                    display_order = 1
                 form_id = self._allocate_id("forms")
                 self._conn.execute(
                     """
@@ -1186,7 +1274,7 @@ class SQLiteCMSStore:
                         record.get("provider", "google_forms"),
                         record.get("formId", ""),
                         1 if record.get("active", True) else 0,
-                        record.get("displayOrder"),
+                        display_order,
                     ),
                 )
             return self.get_form(form_id)  # type: ignore[return-value]
@@ -1229,6 +1317,29 @@ class SQLiteCMSStore:
                     "DELETE FROM forms WHERE id = ?", (form_id,)
                 )
                 return cur.rowcount > 0
+
+    def reorder_forms(self, ordered_ids: list[int]) -> list[dict[str, Any]] | None:
+        with self._lock:
+            existing_rows = self._conn.execute(
+                "SELECT id FROM forms ORDER BY COALESCE(display_order, 9999) ASC, id ASC"
+            ).fetchall()
+            existing_ids = [int(row["id"]) for row in existing_rows]
+            existing_set = set(existing_ids)
+            for fid in ordered_ids:
+                if int(fid) not in existing_set:
+                    return None
+            normalized_ids = [int(fid) for fid in ordered_ids]
+            seen = set(normalized_ids)
+            full_ids = normalized_ids + [
+                fid for fid in existing_ids if fid not in seen
+            ]
+            with self._conn:
+                for order_idx, fid in enumerate(full_ids, start=1):
+                    self._conn.execute(
+                        "UPDATE forms SET display_order = ? WHERE id = ?",
+                        (order_idx, fid),
+                    )
+            return self.list_forms()
 
     def export_snapshot(self) -> dict[str, Any]:
         """Return a deep-copied JSON-compatible snapshot of all collections and sequence counters."""

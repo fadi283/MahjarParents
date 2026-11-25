@@ -4,7 +4,12 @@ import {
   FORM_TYPE_OPTIONS,
   validateGoogleFormInput,
 } from '../../utils/adminValidation.js';
-import { FieldError, ItemRowActions, TOUCH_TARGET_STYLE } from './adminShared.jsx';
+import {
+  FieldError,
+  ItemRowActions,
+  TOUCH_TARGET_STYLE,
+  useDragReorder,
+} from './adminShared.jsx';
 
 function buildFormState(item = null) {
   return {
@@ -13,12 +18,6 @@ function buildFormState(item = null) {
     description: item?.description ?? '',
     embedUrl: item?.embedUrl ?? item?.embed_url ?? item?.canonicalUrl ?? '',
     active: item?.active !== undefined ? Boolean(item.active) : true,
-    displayOrder:
-      item?.displayOrder !== null && item?.displayOrder !== undefined
-        ? String(item.displayOrder)
-        : item?.display_order !== null && item?.display_order !== undefined
-          ? String(item.display_order)
-          : '',
   };
 }
 
@@ -27,6 +26,7 @@ export default function FormsAdminPanel({
   onCreate,
   onUpdate,
   onDelete,
+  onReorder,
   isBusy = false,
   initialEditingItem = null,
 }) {
@@ -36,6 +36,12 @@ export default function FormsAdminPanel({
   );
   const [fieldErrors, setFieldErrors] = useState({});
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const drag = useDragReorder({
+    items: forms,
+    isBusy,
+    onReorder,
+    dataAttribute: 'data-form-id',
+  });
 
   const isEditing = editingId !== null && editingId !== undefined;
 
@@ -170,24 +176,6 @@ export default function FormsAdminPanel({
               </span>
               <FieldError message={fieldErrors.embedUrl} />
             </div>
-
-            <div className="admin-field">
-              <label htmlFor="form-order" className="admin-field__label">
-                ترتيب العرض (اختياري)
-              </label>
-              <input
-                id="form-order"
-                type="number"
-                min="1"
-                step="1"
-                dir="ltr"
-                className="admin-input"
-                value={formState.displayOrder}
-                onChange={(e) => handleFieldChange('displayOrder', e.target.value)}
-                disabled={isBusy}
-              />
-              <FieldError message={fieldErrors.displayOrder} />
-            </div>
           </div>
 
           <div className="admin-field">
@@ -248,6 +236,11 @@ export default function FormsAdminPanel({
         <h4 className="admin-list-section__title">
           النماذج المضمنة المسجلة ({forms.length})
         </h4>
+        {forms.length > 1 && (
+          <p className="admin-list-section__hint">
+            اسحب النموذج وأفلته لتغيير ترتيبه في صفحة التواصل والمشاركة.
+          </p>
+        )}
         {forms.length === 0 ? (
           <div className="admin-empty" role="status">
             لا توجد روابط Google Forms مسجلة حالياً.
@@ -258,26 +251,57 @@ export default function FormsAdminPanel({
               const typeKey = formItem.formType ?? formItem.form_type ?? 'feedback';
               const typeLabel = FORM_TYPE_LABELS[typeKey] ?? typeKey;
               const embedUrl = formItem.embedUrl ?? formItem.embed_url ?? '';
+              const { isDraggable, className } = drag.getItemDragState(formItem.id);
               return (
-                <article key={formItem.id} className="admin-item" role="listitem">
-                  <div className="admin-item__body">
-                    <div className="admin-item__top">
-                      <strong className="admin-item__title">{formItem.title}</strong>
-                      <span className="admin-badge">{typeLabel}</span>
+                <article
+                  key={formItem.id}
+                  className={className}
+                  role="listitem"
+                  draggable={isDraggable}
+                  data-form-id={formItem.id}
+                  onDragStart={(e) => drag.handleDragStart(e, formItem.id)}
+                  onDragOver={(e) => drag.handleDragOver(e, formItem.id)}
+                  onDragEnter={(e) => drag.handleDragOver(e, formItem.id)}
+                  onDrop={(e) => drag.handleDrop(e, formItem.id)}
+                  onDragEnd={drag.handleDragEnd}
+                >
+                  <div className="admin-item__row">
+                    {forms.length > 1 && (
                       <span
-                        className={`admin-badge ${
-                          formItem.active ? 'admin-badge--active' : 'admin-badge--muted'
-                        }`}
+                        className="admin-drag-handle"
+                        role="button"
+                        tabIndex={0}
+                        style={{ ...TOUCH_TARGET_STYLE, touchAction: 'none' }}
+                        title="اسحب لتغيير الترتيب"
+                        aria-label={`اسحب لتغيير ترتيب النموذج ${formItem.title}`}
+                        onKeyDown={(e) => drag.handleKeyDown(e, formItem.id)}
+                        onTouchStart={() => drag.handleTouchStart(formItem.id)}
+                        onTouchMove={drag.handleTouchMove}
+                        onTouchEnd={drag.handleTouchEnd}
+                        onTouchCancel={drag.handleTouchCancel}
                       >
-                        {formItem.active ? 'مفعّل' : 'معطّل'}
+                        ⋮⋮
                       </span>
-                    </div>
-                    {formItem.description && (
-                      <p className="admin-item__desc">{formItem.description}</p>
                     )}
-                    <p className="admin-item__url" dir="ltr">
-                      {embedUrl}
-                    </p>
+                    <div className="admin-item__body">
+                      <div className="admin-item__top">
+                        <strong className="admin-item__title">{formItem.title}</strong>
+                        <span className="admin-badge">{typeLabel}</span>
+                        <span
+                          className={`admin-badge ${
+                            formItem.active ? 'admin-badge--active' : 'admin-badge--muted'
+                          }`}
+                        >
+                          {formItem.active ? 'مفعّل' : 'معطّل'}
+                        </span>
+                      </div>
+                      {formItem.description && (
+                        <p className="admin-item__desc">{formItem.description}</p>
+                      )}
+                      <p className="admin-item__url" dir="ltr">
+                        {embedUrl}
+                      </p>
+                    </div>
                   </div>
                   <ItemRowActions
                     itemId={formItem.id}

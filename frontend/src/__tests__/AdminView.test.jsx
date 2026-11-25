@@ -23,8 +23,10 @@ import {
   translateAdminError,
 } from '../utils/adminApi.js';
 import {
+  moveItemInList,
   movePostInList,
   removeById,
+  reorderItemsByDrag,
   reorderPostsByDrag,
   syncMediaLinksIntoPosts,
   upsertCommitteeList,
@@ -184,6 +186,16 @@ test('validateCommitteeInput sanitizes XSS, validates required/optional fields, 
   });
   assert.equal(emptyOrderResult.valid, true);
   assert.equal(emptyOrderResult.payload.displayOrder, null);
+
+  const omittedOrderResult = validateCommitteeInput({
+    fullName: 'ليلى حسن',
+    role: 'عضو لجنة',
+  });
+  assert.equal(omittedOrderResult.valid, true);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(omittedOrderResult.payload, 'displayOrder'),
+    false
+  );
 
   const badCases = [
     { fullName: '<script>alert(1)</script>', role: 'عضو' },
@@ -351,6 +363,18 @@ test('validateGoogleFormInput validates formType, title, description, embedUrl, 
     active: false,
     displayOrder: 4,
   });
+
+  const omittedOrderValid = validateGoogleFormInput({
+    formType: 'feedback',
+    title: 'استمارة دون رقم ترتيب',
+    embedUrl: 'https://docs.google.com/forms/d/e/1FAIpQLSeValidForm123456/viewform',
+    active: true,
+  });
+  assert.equal(omittedOrderValid.valid, true);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(omittedOrderValid.payload, 'displayOrder'),
+    false
+  );
 
   const invalid = validateGoogleFormInput({
     formType: 'invalid_type',
@@ -530,12 +554,34 @@ test('adminState helpers upsert, remove, order, and sync media links into posts'
   assert.equal(syncedPosts[1].mediaLinks.length, 0);
 
   const forms = upsertFormList(
-    [{ id: 1, title: 'ثاني', displayOrder: 2 }],
-    { id: 2, title: 'أول', displayOrder: 1 }
+    [
+      { id: 1, title: 'أول قديم', displayOrder: 1 },
+      { id: 2, title: 'ثان قديم', displayOrder: 2 },
+    ],
+    { id: 3, title: 'جديد بالبداية', displayOrder: 1 }
   );
-  assert.deepEqual(forms.map((f) => f.id), [2, 1]);
+  assert.deepEqual(forms.map((f) => f.id), [3, 1, 2]);
+  assert.deepEqual(forms.map((f) => f.displayOrder), [1, 2, 3]);
 
-  assert.deepEqual(removeById(forms, 2).map((f) => f.id), [1]);
+  assert.deepEqual(removeById(forms, 3).map((f) => f.id), [1, 2]);
+
+  const movedFormUp = moveItemInList(forms, 2, 'up');
+  assert.equal(movedFormUp.moved, true);
+  assert.deepEqual(movedFormUp.orderedIds, [3, 2, 1]);
+  assert.deepEqual(movedFormUp.nextItems.map((f) => f.displayOrder), [1, 2, 3]);
+
+  const draggedCommittee = reorderItemsByDrag(
+    [
+      { id: 10, fullName: 'أ', displayOrder: 1 },
+      { id: 20, fullName: 'ب', displayOrder: 2 },
+      { id: 30, fullName: 'ج', displayOrder: 3 },
+    ],
+    30,
+    10
+  );
+  assert.equal(draggedCommittee.moved, true);
+  assert.deepEqual(draggedCommittee.orderedIds, [30, 10, 20]);
+  assert.deepEqual(draggedCommittee.nextItems.map((m) => m.displayOrder), [1, 2, 3]);
 
   const customOrderedPosts = upsertPostList(
     [
@@ -571,7 +617,7 @@ test('adminState helpers upsert, remove, order, and sync media links into posts'
   assert.equal(reorderPostsByDrag(customOrderedPosts, 999, 2).moved, false);
 });
 
-test('createAdminApiClient reorderPosts sends PUT /api/admin/posts/reorder with postIds', async () => {
+test('createAdminApiClient reorder endpoints send PUT requests with ordered IDs', async () => {
   const calls = [];
   const storage = createMemoryStorage({ [ADMIN_TOKEN_STORAGE_KEY]: 'tok-reorder' });
   const mockFetch = async (url, options = {}) => {
@@ -580,11 +626,21 @@ test('createAdminApiClient reorderPosts sends PUT /api/admin/posts/reorder with 
   };
   const api = createAdminApiClient({ fetchImpl: mockFetch, storage });
   await api.reorderPosts([3, 1, 2]);
+  await api.reorderCommittee([4, 2, 1]);
+  await api.reorderForms([5, 3, 1]);
 
-  assert.equal(calls.length, 1);
+  assert.equal(calls.length, 3);
   assert.equal(calls[0].url, '/api/admin/posts/reorder');
   assert.equal(calls[0].options.method, 'PUT');
   assert.equal(calls[0].options.body, JSON.stringify({ postIds: [3, 1, 2] }));
+
+  assert.equal(calls[1].url, '/api/admin/committee/reorder');
+  assert.equal(calls[1].options.method, 'PUT');
+  assert.equal(calls[1].options.body, JSON.stringify({ memberIds: [4, 2, 1] }));
+
+  assert.equal(calls[2].url, '/api/admin/forms/reorder');
+  assert.equal(calls[2].options.method, 'PUT');
+  assert.equal(calls[2].options.body, JSON.stringify({ formIds: [5, 3, 1] }));
 });
 
 // --- 4. React SSR & Protected Admin UI Tests ---
@@ -714,13 +770,24 @@ test('Authenticated AdminDashboard renders header, logout, 3 accessible tabs wit
 test('Admin CRUD panels support edit mode with save/cancel actions and accessible buttons', () => {
   const committeeEditHtml = renderToStaticMarkup(
     <CommitteeAdminPanel
-      members={[{ id: 1, fullName: 'عضو أول', role: 'عضو لجنة' }]}
+      members={[
+        { id: 1, fullName: 'عضو أول', role: 'عضو لجنة' },
+        { id: 2, fullName: 'عضو ثان', role: 'نائب الرئيس' },
+      ]}
       initialEditingItem={{ id: 1, fullName: 'عضو أول', role: 'عضو لجنة', email: 'a@b.com' }}
     />
   );
   assert.ok(committeeEditHtml.includes('حفظ التعديلات'));
   assert.ok(committeeEditHtml.includes('إلغاء التعديل'));
   assert.ok(committeeEditHtml.includes('value="عضو أول"'));
+  assert.ok(!committeeEditHtml.includes('id="committee-order"'));
+  assert.ok(committeeEditHtml.includes('draggable="true"'));
+  assert.ok(committeeEditHtml.includes('data-member-id="1"'));
+  assert.ok(committeeEditHtml.includes('data-member-id="2"'));
+  assert.ok(committeeEditHtml.includes('admin-drag-handle'));
+  assert.ok(committeeEditHtml.includes('اسحب عضو اللجنة وأفلته لتغيير ترتيبه في دليل اللجنة.'));
+  assert.ok(committeeEditHtml.includes('اسحب لتغيير ترتيب عضو اللجنة عضو أول'));
+  assert.ok(committeeEditHtml.includes('اسحب لتغيير ترتيب عضو اللجنة عضو ثان'));
 
   const postEditHtml = renderToStaticMarkup(
     <PostsAdminPanel
@@ -778,12 +845,23 @@ test('Admin CRUD panels support edit mode with save/cancel actions and accessibl
 
   const formEditHtml = renderToStaticMarkup(
     <FormsAdminPanel
-      forms={[{ id: 4, formType: 'feedback', title: 'استمارة', embedUrl: 'https://docs.google.com/forms/d/e/1234567890ab/viewform?embedded=true', active: true }]}
+      forms={[
+        { id: 4, formType: 'feedback', title: 'استمارة', embedUrl: 'https://docs.google.com/forms/d/e/1234567890ab/viewform?embedded=true', active: true },
+        { id: 5, formType: 'help_request', title: 'استمارة ثانية', embedUrl: 'https://docs.google.com/forms/d/e/1234567890cd/viewform?embedded=true', active: true },
+      ]}
       initialEditingItem={{ id: 4, formType: 'feedback', title: 'استمارة', embedUrl: 'https://docs.google.com/forms/d/e/1234567890ab/viewform?embedded=true', active: true }}
     />
   );
   assert.ok(formEditHtml.includes('حفظ التعديلات'));
   assert.ok(formEditHtml.includes('value="استمارة"'));
+  assert.ok(!formEditHtml.includes('id="form-order"'));
+  assert.ok(formEditHtml.includes('draggable="true"'));
+  assert.ok(formEditHtml.includes('data-form-id="4"'));
+  assert.ok(formEditHtml.includes('data-form-id="5"'));
+  assert.ok(formEditHtml.includes('admin-drag-handle'));
+  assert.ok(formEditHtml.includes('اسحب النموذج وأفلته لتغيير ترتيبه في صفحة التواصل والمشاركة.'));
+  assert.ok(formEditHtml.includes('اسحب لتغيير ترتيب النموذج استمارة'));
+  assert.ok(formEditHtml.includes('اسحب لتغيير ترتيب النموذج استمارة ثانية'));
 });
 
 test('App renders public view with accessible admin entry button and renders protected admin login when initialView="admin"', () => {

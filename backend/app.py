@@ -1237,6 +1237,34 @@ def _parse_form_payload(payload: dict, partial: bool = False) -> dict:
     return record
 
 
+def _validate_reorder_ids(
+    payload: dict, camel_key: str, snake_key: str, item_label: str
+) -> list[int]:
+    """Validate and deduplicate a non-empty list of positive entity IDs for reordering."""
+    raw_ids = payload.get(camel_key) if camel_key in payload else payload.get(snake_key)
+    if not isinstance(raw_ids, list) or len(raw_ids) == 0:
+        raise CMSValidationError(
+            f"Field '{camel_key}' must be a non-empty list of {item_label} IDs.",
+            status_code=400,
+            code="VALIDATION_ERROR",
+            field=camel_key,
+        )
+    validated_ids: list[int] = []
+    seen_ids: set[int] = set()
+    for item in raw_ids:
+        entity_id = validate_positive_int_field(item, camel_key)
+        if entity_id in seen_ids:
+            raise CMSValidationError(
+                f"Field '{camel_key}' must not contain duplicate IDs.",
+                status_code=400,
+                code="VALIDATION_ERROR",
+                field=camel_key,
+            )
+        seen_ids.add(entity_id)
+        validated_ids.append(entity_id)
+    return validated_ids
+
+
 def _load_dotenv_defaults() -> dict[str, str]:
     """Read key-value defaults from project or backend .env files without mutating os.environ."""
     values: dict[str, str] = {}
@@ -2054,6 +2082,25 @@ def create_app(test_config=None):
         clear_committee_cache()
         return jsonify({"deleted": True, "id": member_id}), 200
 
+    @flask_app.route("/api/admin/committee/reorder", methods=["PUT"])
+    @require_admin_auth
+    def admin_reorder_committee():
+        payload = _require_json_object()
+        validated_ids = _validate_reorder_ids(
+            payload, "memberIds", "member_ids", "committee member"
+        )
+        reordered = _get_store().reorder_committee(validated_ids)
+        if reordered is None:
+            return (
+                jsonify({
+                    "error": "One or more committee member IDs were not found.",
+                    "code": "NOT_FOUND",
+                }),
+                404,
+            )
+        clear_committee_cache()
+        return jsonify(_normalize_and_order_committee_members(_get_store().list_committee())), 200
+
     # --- Posts CRUD ---
 
     @flask_app.route("/api/admin/posts", methods=["GET"])
@@ -2107,27 +2154,9 @@ def create_app(test_config=None):
     @require_admin_auth
     def admin_reorder_posts():
         payload = _require_json_object()
-        raw_ids = payload.get("postIds") if "postIds" in payload else payload.get("post_ids")
-        if not isinstance(raw_ids, list) or len(raw_ids) == 0:
-            raise CMSValidationError(
-                "Field 'postIds' must be a non-empty list of post IDs.",
-                status_code=400,
-                code="VALIDATION_ERROR",
-                field="postIds",
-            )
-        validated_ids: list[int] = []
-        seen_ids: set[int] = set()
-        for item in raw_ids:
-            pid = validate_positive_int_field(item, "postIds")
-            if pid in seen_ids:
-                raise CMSValidationError(
-                    "Field 'postIds' must not contain duplicate IDs.",
-                    status_code=400,
-                    code="VALIDATION_ERROR",
-                    field="postIds",
-                )
-            seen_ids.add(pid)
-            validated_ids.append(pid)
+        validated_ids = _validate_reorder_ids(
+            payload, "postIds", "post_ids", "post"
+        )
 
         reordered = _get_store().reorder_posts(validated_ids)
         if reordered is None:
@@ -2321,6 +2350,25 @@ def create_app(test_config=None):
             )
         clear_forms_cache()
         return jsonify({"deleted": True, "id": form_id}), 200
+
+    @flask_app.route("/api/admin/forms/reorder", methods=["PUT"])
+    @require_admin_auth
+    def admin_reorder_forms():
+        payload = _require_json_object()
+        validated_ids = _validate_reorder_ids(
+            payload, "formIds", "form_ids", "Google Form"
+        )
+        reordered = _get_store().reorder_forms(validated_ids)
+        if reordered is None:
+            return (
+                jsonify({
+                    "error": "One or more Google Form IDs were not found.",
+                    "code": "NOT_FOUND",
+                }),
+                404,
+            )
+        clear_forms_cache()
+        return jsonify([_format_form_record(form) for form in _get_store().list_forms()]), 200
 
     if flask_app.config.get("SERVE_FRONTEND_DIST"):
         dist_root = os.path.abspath(flask_app.config["FRONTEND_DIST_DIR"])

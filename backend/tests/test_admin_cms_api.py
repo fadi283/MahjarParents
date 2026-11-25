@@ -144,10 +144,12 @@ class TestAdminAuthLifecycle:
             ("POST", "/api/admin/committee"),
             ("PUT", "/api/admin/committee/1"),
             ("DELETE", "/api/admin/committee/1"),
+            ("PUT", "/api/admin/committee/reorder"),
             ("GET", "/api/admin/posts"),
             ("POST", "/api/admin/posts"),
             ("PUT", "/api/admin/posts/1"),
             ("DELETE", "/api/admin/posts/1"),
+            ("PUT", "/api/admin/posts/reorder"),
             ("GET", "/api/admin/media-links"),
             ("POST", "/api/admin/media-links"),
             ("PUT", "/api/admin/media-links/1"),
@@ -159,6 +161,7 @@ class TestAdminAuthLifecycle:
             ("POST", "/api/admin/forms"),
             ("PUT", "/api/admin/forms/1"),
             ("DELETE", "/api/admin/forms/1"),
+            ("PUT", "/api/admin/forms/reorder"),
         ],
     )
     def test_all_admin_endpoints_reject_unauthenticated_requests(
@@ -931,3 +934,206 @@ class TestAdminPostsReordering:
         with app2.test_client() as client2:
             persisted_ids = [p["id"] for p in client2.get("/api/posts").get_json()]
             assert persisted_ids == [new_post_id, *reversed_ids]
+
+
+@pytest.mark.api
+class TestAdminCommitteeReordering:
+    """Verify persistent admin committee reordering across JSON and SQLite backends."""
+
+    @pytest.mark.parametrize("backend_mode", ["json", "sqlite"])
+    def test_reorder_committee_requires_auth_validates_ids_and_persists(
+        self, tmp_path, admin_credentials, backend_mode
+    ):
+        config = {
+            "TESTING": True,
+            "SECRET_KEY": f"reorder-committee-{backend_mode}-secret",
+            "ADMIN_USERNAME": admin_credentials["username"],
+            "ADMIN_PASSWORD": admin_credentials["password"],
+        }
+        if backend_mode == "sqlite":
+            config["STORAGE_BACKEND"] = "sqlite"
+            config["CMS_DATA_FILE"] = str(tmp_path / "cms.db")
+        else:
+            config["CMS_DATA_FILE"] = str(tmp_path / "cms.json")
+
+        app1 = backend_app.create_app(config)
+        with app1.test_client() as client:
+            assert (
+                client.put("/api/admin/committee/reorder", json={"memberIds": [1, 2]}).status_code
+                == 401
+            )
+            token = client.post("/api/admin/auth/login", json=admin_credentials).get_json()["token"]
+            headers = {"Authorization": f"Bearer {token}"}
+
+            initial_ids = [
+                m["id"] for m in client.get("/api/admin/committee", headers=headers).get_json()
+            ]
+            reversed_ids = list(reversed(initial_ids))
+
+            assert (
+                client.put(
+                    "/api/admin/committee/reorder", headers=headers, json={"memberIds": []}
+                ).status_code
+                == 400
+            )
+            assert (
+                client.put(
+                    "/api/admin/committee/reorder",
+                    headers=headers,
+                    json={"memberIds": [initial_ids[0], initial_ids[0]]},
+                ).status_code
+                == 400
+            )
+            assert (
+                client.put(
+                    "/api/admin/committee/reorder",
+                    headers=headers,
+                    json={"memberIds": [99999]},
+                ).status_code
+                == 404
+            )
+
+            reorder_resp = client.put(
+                "/api/admin/committee/reorder",
+                headers=headers,
+                json={"memberIds": reversed_ids},
+            )
+            assert reorder_resp.status_code == 200
+            assert [m["id"] for m in reorder_resp.get_json()] == reversed_ids
+            assert [m["id"] for m in client.get("/api/committee").get_json()] == reversed_ids
+
+            # Creating a new member without displayOrder puts them at the end
+            create_resp = client.post(
+                "/api/admin/committee",
+                headers=headers,
+                json={"fullName": "عضو جديد نهاية القائمة", "role": "عضو لجنة"},
+            )
+            assert create_resp.status_code == 201
+            new_member_id = create_resp.get_json()["id"]
+            assert [m["id"] for m in client.get("/api/committee").get_json()] == [
+                *reversed_ids,
+                new_member_id,
+            ]
+
+            # Updating without displayOrder preserves position at the end
+            update_resp = client.put(
+                f"/api/admin/committee/{new_member_id}",
+                headers=headers,
+                json={"role": "منسق الأنشطة"},
+            )
+            assert update_resp.status_code == 200
+            assert [m["id"] for m in client.get("/api/committee").get_json()] == [
+                *reversed_ids,
+                new_member_id,
+            ]
+
+        backend_app.clear_committee_cache()
+        app2 = backend_app.create_app(config)
+        with app2.test_client() as client2:
+            persisted_ids = [m["id"] for m in client2.get("/api/committee").get_json()]
+            assert persisted_ids == [*reversed_ids, new_member_id]
+
+
+@pytest.mark.api
+class TestAdminFormsReordering:
+    """Verify persistent admin Google Forms reordering across JSON and SQLite backends."""
+
+    @pytest.mark.parametrize("backend_mode", ["json", "sqlite"])
+    def test_reorder_forms_requires_auth_validates_ids_and_persists(
+        self, tmp_path, admin_credentials, backend_mode
+    ):
+        config = {
+            "TESTING": True,
+            "SECRET_KEY": f"reorder-forms-{backend_mode}-secret",
+            "ADMIN_USERNAME": admin_credentials["username"],
+            "ADMIN_PASSWORD": admin_credentials["password"],
+        }
+        if backend_mode == "sqlite":
+            config["STORAGE_BACKEND"] = "sqlite"
+            config["CMS_DATA_FILE"] = str(tmp_path / "cms.db")
+        else:
+            config["CMS_DATA_FILE"] = str(tmp_path / "cms.json")
+
+        app1 = backend_app.create_app(config)
+        with app1.test_client() as client:
+            assert (
+                client.put("/api/admin/forms/reorder", json={"formIds": [1, 2]}).status_code
+                == 401
+            )
+            token = client.post("/api/admin/auth/login", json=admin_credentials).get_json()["token"]
+            headers = {"Authorization": f"Bearer {token}"}
+
+            initial_ids = [
+                f["id"] for f in client.get("/api/admin/forms", headers=headers).get_json()
+            ]
+            reversed_ids = list(reversed(initial_ids))
+
+            assert (
+                client.put(
+                    "/api/admin/forms/reorder", headers=headers, json={"formIds": []}
+                ).status_code
+                == 400
+            )
+            assert (
+                client.put(
+                    "/api/admin/forms/reorder",
+                    headers=headers,
+                    json={"formIds": [initial_ids[0], initial_ids[0]]},
+                ).status_code
+                == 400
+            )
+            assert (
+                client.put(
+                    "/api/admin/forms/reorder",
+                    headers=headers,
+                    json={"formIds": [99999]},
+                ).status_code
+                == 404
+            )
+
+            reorder_resp = client.put(
+                "/api/admin/forms/reorder",
+                headers=headers,
+                json={"formIds": reversed_ids},
+            )
+            assert reorder_resp.status_code == 200
+            assert [f["id"] for f in reorder_resp.get_json()] == reversed_ids
+            assert [f["id"] for f in client.get("/api/forms").get_json()] == reversed_ids
+
+            # Creating a new form without displayOrder puts it at the beginning (displayOrder=1)
+            create_resp = client.post(
+                "/api/admin/forms",
+                headers=headers,
+                json={
+                    "formType": "feedback",
+                    "title": "نموذج جديد بداية القائمة",
+                    "embedUrl": "https://docs.google.com/forms/d/e/1FAIpQLScNewTopForm123456/viewform",
+                    "active": True,
+                },
+            )
+            assert create_resp.status_code == 201
+            new_form = create_resp.get_json()
+            assert new_form["displayOrder"] == 1
+            new_form_id = new_form["id"]
+            assert [f["id"] for f in client.get("/api/forms").get_json()] == [
+                new_form_id,
+                *reversed_ids,
+            ]
+
+            # Updating without displayOrder preserves position at the beginning
+            update_resp = client.put(
+                f"/api/admin/forms/{new_form_id}",
+                headers=headers,
+                json={"title": "نموذج محدّث بداية القائمة"},
+            )
+            assert update_resp.status_code == 200
+            assert [f["id"] for f in client.get("/api/forms").get_json()] == [
+                new_form_id,
+                *reversed_ids,
+            ]
+
+        backend_app.clear_forms_cache()
+        app2 = backend_app.create_app(config)
+        with app2.test_client() as client2:
+            persisted_ids = [f["id"] for f in client2.get("/api/forms").get_json()]
+            assert persisted_ids == [new_form_id, *reversed_ids]

@@ -213,6 +213,13 @@ export function createAdminApiClient({
       return request(`/api/admin/committee/${id}`, { method: 'DELETE' });
     },
 
+    reorderCommittee(memberIds) {
+      return request('/api/admin/committee/reorder', {
+        method: 'PUT',
+        body: { memberIds },
+      });
+    },
+
     listPosts() {
       return request('/api/admin/posts', { method: 'GET' });
     },
@@ -270,6 +277,13 @@ export function createAdminApiClient({
 
     deleteForm(id) {
       return request(`/api/admin/forms/${id}`, { method: 'DELETE' });
+    },
+
+    reorderForms(formIds) {
+      return request('/api/admin/forms/reorder', {
+        method: 'PUT',
+        body: { formIds },
+      });
     },
 
     uploadImage(file) {

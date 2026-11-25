@@ -336,6 +336,14 @@ export default function AdminDashboard({
                 notifyParent({ committee: nextCommittee, posts, forms });
               }, 'تم حذف عضو اللجنة بنجاح.')
             }
+            onReorder={(orderedIds) =>
+              runMutation(async () => {
+                const reordered = await apiClient.reorderCommittee(orderedIds);
+                const nextCommittee = Array.isArray(reordered) ? reordered : committee;
+                setCommittee(nextCommittee);
+                notifyParent({ committee: nextCommittee, posts, forms });
+              }, 'تم تحديث ترتيب أعضاء اللجنة بنجاح.')
+            }
           />
         )}
 
@@ -408,6 +416,14 @@ export default function AdminDashboard({
                 setForms(nextForms);
                 notifyParent({ committee, posts, forms: nextForms });
               }, 'تم حذف نموذج Google Forms بنجاح.')
+            }
+            onReorder={(orderedIds) =>
+              runMutation(async () => {
+                const reordered = await apiClient.reorderForms(orderedIds);
+                const nextForms = Array.isArray(reordered) ? reordered : forms;
+                setForms(nextForms);
+                notifyParent({ committee, posts, forms: nextForms });
+              }, 'تم تحديث ترتيب النماذج بنجاح.')
             }
           />
         )}
