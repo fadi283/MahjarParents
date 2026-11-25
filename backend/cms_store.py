@@ -1,4 +1,4 @@
-"""Thread-safe atomic JSON-backed CMS store for committee, posts, media links, and forms."""
+"""Thread-safe JSON and SQLite CMS stores for committee, posts, media links, and forms."""
 
 from __future__ import annotations
 
@@ -6,9 +6,11 @@ import copy
 import json
 import os
 from pathlib import Path
+import sqlite3
 import tempfile
 import threading
 from typing import Any
+from urllib.parse import unquote, urlsplit
 
 ALLOWED_FORM_TYPES = ("feedback", "help_request", "event_registration")
 
@@ -382,3 +384,862 @@ class CMSStore:
                 return False
             self._persist()
             return True
+
+    def export_snapshot(self) -> dict[str, Any]:
+        """Return a deep-copied snapshot of all collections and sequence counters."""
+        with self._lock:
+            return copy.deepcopy(self._data)
+
+    def storage_info(self) -> dict[str, Any]:
+        """Return non-secret storage diagnostics for health/readiness reporting."""
+        with self._lock:
+            size_bytes = (
+                self._data_file.stat().st_size
+                if self._data_file and self._data_file.is_file()
+                else 0
+            )
+            return {
+                "backend": "json",
+                "persisted": bool(self._data_file),
+                "sizeBytes": int(size_bytes),
+                "counts": {
+                    "committee": len(self._data["committee"]),
+                    "posts": len(self._data["posts"]),
+                    "mediaLinks": len(self._data["media_links"]),
+                    "forms": len(self._data["forms"]),
+                },
+            }
+
+
+class SQLiteCMSStore:
+    """Thread-safe SQLite-backed CMS store with WAL mode and JSON-store parity."""
+
+    def __init__(
+        self,
+        default_committee: list[dict[str, Any]],
+        default_posts: list[dict[str, Any]],
+        default_forms: list[dict[str, Any]] | None = None,
+        db_path: str | Path = ":memory:",
+    ):
+        self._lock = threading.RLock()
+        raw_path = str(db_path).strip() if db_path is not None else ":memory:"
+        self._is_memory = raw_path == ":memory:" or not raw_path
+        self._db_path = None if self._is_memory else Path(raw_path)
+        self._conn = self._open_connection()
+        self._initialize_schema_and_seed(
+            default_committee,
+            default_posts,
+            DEFAULT_GOOGLE_FORMS if default_forms is None else default_forms,
+        )
+
+    def _open_connection(self) -> sqlite3.Connection:
+        if self._db_path is not None:
+            self._db_path.parent.mkdir(parents=True, exist_ok=True)
+            target = str(self._db_path)
+        else:
+            target = ":memory:"
+        conn = sqlite3.connect(target, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
+        if not self._is_memory:
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.execute("PRAGMA synchronous = NORMAL")
+        return conn
+
+    def close(self) -> None:
+        with self._lock:
+            self._conn.close()
+
+    def _initialize_schema_and_seed(
+        self,
+        default_committee: list[dict[str, Any]],
+        default_posts: list[dict[str, Any]],
+        default_forms: list[dict[str, Any]],
+    ) -> None:
+        with self._lock:
+            with self._conn:
+                self._conn.executescript(
+                    """
+                    CREATE TABLE IF NOT EXISTS metadata (
+                        key TEXT PRIMARY KEY,
+                        value TEXT NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS sequences (
+                        collection TEXT PRIMARY KEY,
+                        next_id INTEGER NOT NULL
+                    );
+                    CREATE TABLE IF NOT EXISTS committee (
+                        id INTEGER PRIMARY KEY,
+                        full_name TEXT NOT NULL,
+                        role TEXT NOT NULL,
+                        responsibility_summary TEXT NOT NULL DEFAULT '',
+                        email TEXT NOT NULL DEFAULT '',
+                        phone TEXT NOT NULL DEFAULT '',
+                        avatar_url TEXT NOT NULL DEFAULT '',
+                        display_order INTEGER
+                    );
+                    CREATE TABLE IF NOT EXISTS posts (
+                        id INTEGER PRIMARY KEY,
+                        title TEXT NOT NULL,
+                        summary TEXT NOT NULL,
+                        category TEXT NOT NULL,
+                        published_at TEXT NOT NULL DEFAULT '',
+                        event_date TEXT NOT NULL DEFAULT '',
+                        image_url TEXT NOT NULL DEFAULT ''
+                    );
+                    CREATE TABLE IF NOT EXISTS media_links (
+                        id INTEGER PRIMARY KEY,
+                        post_id INTEGER NULL REFERENCES posts(id) ON DELETE CASCADE,
+                        media_type TEXT NOT NULL,
+                        provider TEXT NOT NULL,
+                        canonical_url TEXT NOT NULL,
+                        embed_url TEXT NOT NULL,
+                        original_url TEXT NOT NULL DEFAULT '',
+                        hosted_externally INTEGER NOT NULL DEFAULT 1,
+                        title TEXT NOT NULL DEFAULT ''
+                    );
+                    CREATE INDEX IF NOT EXISTS idx_media_links_post_id
+                        ON media_links(post_id);
+                    CREATE TABLE IF NOT EXISTS forms (
+                        id INTEGER PRIMARY KEY,
+                        form_type TEXT NOT NULL,
+                        title TEXT NOT NULL,
+                        description TEXT NOT NULL DEFAULT '',
+                        canonical_url TEXT NOT NULL,
+                        embed_url TEXT NOT NULL,
+                        provider TEXT NOT NULL DEFAULT 'google_forms',
+                        form_id TEXT NOT NULL DEFAULT '',
+                        active INTEGER NOT NULL DEFAULT 1,
+                        display_order INTEGER
+                    );
+                    """
+                )
+                row = self._conn.execute(
+                    "SELECT value FROM metadata WHERE key = 'seeded'"
+                ).fetchone()
+                if row is not None:
+                    return
+
+                temp_seed = CMSStore(
+                    default_committee,
+                    default_posts,
+                    default_forms,
+                    data_file=None,
+                ).export_snapshot()
+                self._write_snapshot_unlocked(temp_seed)
+
+    def _write_snapshot_unlocked(self, snapshot: dict[str, Any]) -> None:
+        self._conn.execute("DELETE FROM media_links")
+        self._conn.execute("DELETE FROM posts")
+        self._conn.execute("DELETE FROM committee")
+        self._conn.execute("DELETE FROM forms")
+        self._conn.execute("DELETE FROM sequences")
+
+        committee = snapshot.get("committee", [])
+        for member in committee:
+            self._conn.execute(
+                """
+                INSERT INTO committee (
+                    id, full_name, role, responsibility_summary,
+                    email, phone, avatar_url, display_order
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(member["id"]),
+                    member.get("fullName", ""),
+                    member.get("role", ""),
+                    member.get("responsibilitySummary", ""),
+                    member.get("email", ""),
+                    member.get("phone", ""),
+                    member.get("avatarUrl", ""),
+                    member.get("displayOrder"),
+                ),
+            )
+
+        posts = snapshot.get("posts", [])
+        for post in posts:
+            self._conn.execute(
+                """
+                INSERT INTO posts (
+                    id, title, summary, category, published_at, event_date, image_url
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(post["id"]),
+                    post.get("title", ""),
+                    post.get("summary", ""),
+                    post.get("category", "general"),
+                    post.get("publishedAt", ""),
+                    post.get("eventDate", ""),
+                    post.get("imageUrl", ""),
+                ),
+            )
+
+        media_links = snapshot.get("media_links", [])
+        for link in media_links:
+            self._conn.execute(
+                """
+                INSERT INTO media_links (
+                    id, post_id, media_type, provider, canonical_url,
+                    embed_url, original_url, hosted_externally, title
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(link["id"]),
+                    link.get("postId"),
+                    link.get("mediaType", "video"),
+                    link.get("provider", ""),
+                    link.get("canonicalUrl", ""),
+                    link.get("embedUrl", ""),
+                    link.get("originalUrl", ""),
+                    1 if link.get("hostedExternally", True) else 0,
+                    link.get("title", ""),
+                ),
+            )
+
+        forms = snapshot.get("forms", [])
+        for form in forms:
+            self._conn.execute(
+                """
+                INSERT INTO forms (
+                    id, form_type, title, description, canonical_url,
+                    embed_url, provider, form_id, active, display_order
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(form["id"]),
+                    form.get("formType", "feedback"),
+                    form.get("title", ""),
+                    form.get("description", ""),
+                    form.get("canonicalUrl", ""),
+                    form.get("embedUrl", ""),
+                    form.get("provider", "google_forms"),
+                    form.get("formId", ""),
+                    1 if form.get("active", True) else 0,
+                    form.get("displayOrder"),
+                ),
+            )
+
+        next_ids = snapshot.get("next_ids", {})
+        defaults = {
+            "committee": max((int(r["id"]) for r in committee), default=0) + 1,
+            "posts": max((int(r["id"]) for r in posts), default=0) + 1,
+            "media_links": max((int(r["id"]) for r in media_links), default=0) + 1,
+            "forms": max((int(r["id"]) for r in forms), default=0) + 1,
+        }
+        for collection, fallback in defaults.items():
+            next_val = int(next_ids.get(collection) or fallback)
+            self._conn.execute(
+                "INSERT INTO sequences (collection, next_id) VALUES (?, ?)",
+                (collection, max(next_val, fallback)),
+            )
+
+        self._conn.execute(
+            "INSERT OR REPLACE INTO metadata (key, value) VALUES ('seeded', '1')"
+        )
+
+    def _allocate_id(self, collection: str) -> int:
+        row = self._conn.execute(
+            "SELECT next_id FROM sequences WHERE collection = ?",
+            (collection,),
+        ).fetchone()
+        if row is None:
+            next_id = 1
+            self._conn.execute(
+                "INSERT INTO sequences (collection, next_id) VALUES (?, ?)",
+                (collection, 2),
+            )
+            return next_id
+        allocated = int(row["next_id"])
+        self._conn.execute(
+            "UPDATE sequences SET next_id = ? WHERE collection = ?",
+            (allocated + 1, collection),
+        )
+        return allocated
+
+    @staticmethod
+    def _row_to_committee(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "fullName": row["full_name"],
+            "role": row["role"],
+            "responsibilitySummary": row["responsibility_summary"],
+            "email": row["email"],
+            "phone": row["phone"],
+            "avatarUrl": row["avatar_url"],
+            "displayOrder": row["display_order"],
+        }
+
+    @staticmethod
+    def _row_to_media_link(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "postId": row["post_id"],
+            "mediaType": row["media_type"],
+            "provider": row["provider"],
+            "canonicalUrl": row["canonical_url"],
+            "embedUrl": row["embed_url"],
+            "originalUrl": row["original_url"],
+            "hostedExternally": bool(row["hosted_externally"]),
+            "title": row["title"],
+        }
+
+    @staticmethod
+    def _row_to_post(
+        row: sqlite3.Row, media_links: list[dict[str, Any]]
+    ) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "title": row["title"],
+            "summary": row["summary"],
+            "category": row["category"],
+            "publishedAt": row["published_at"],
+            "eventDate": row["event_date"],
+            "imageUrl": row["image_url"],
+            "mediaLinks": media_links,
+        }
+
+    @staticmethod
+    def _row_to_form(row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "formType": row["form_type"],
+            "title": row["title"],
+            "description": row["description"],
+            "canonicalUrl": row["canonical_url"],
+            "embedUrl": row["embed_url"],
+            "provider": row["provider"],
+            "formId": row["form_id"],
+            "active": bool(row["active"]),
+            "displayOrder": row["display_order"],
+        }
+
+    def _replace_post_media_links_unlocked(
+        self, post_id: int, links: list[dict[str, Any]]
+    ) -> None:
+        self._conn.execute("DELETE FROM media_links WHERE post_id = ?", (post_id,))
+        for link in links:
+            link_id = self._allocate_id("media_links")
+            self._conn.execute(
+                """
+                INSERT INTO media_links (
+                    id, post_id, media_type, provider, canonical_url,
+                    embed_url, original_url, hosted_externally, title
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    link_id,
+                    post_id,
+                    link.get("mediaType", "video"),
+                    link.get("provider", ""),
+                    link.get("canonicalUrl", ""),
+                    link.get("embedUrl", ""),
+                    link.get("originalUrl", ""),
+                    1 if link.get("hostedExternally", True) else 0,
+                    link.get("title", ""),
+                ),
+            )
+
+    def _hydrate_post_unlocked(self, post_row: sqlite3.Row) -> dict[str, Any]:
+        link_rows = self._conn.execute(
+            "SELECT * FROM media_links WHERE post_id = ? ORDER BY id ASC",
+            (post_row["id"],),
+        ).fetchall()
+        links = [self._row_to_media_link(r) for r in link_rows]
+        return self._row_to_post(post_row, links)
+
+    # --- Committee CRUD ---
+
+    def list_committee(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM committee ORDER BY id ASC"
+            ).fetchall()
+            return [self._row_to_committee(r) for r in rows]
+
+    def get_committee_member(self, member_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM committee WHERE id = ?", (member_id,)
+            ).fetchone()
+            return self._row_to_committee(row) if row is not None else None
+
+    def create_committee_member(self, record: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            with self._conn:
+                member_id = self._allocate_id("committee")
+                self._conn.execute(
+                    """
+                    INSERT INTO committee (
+                        id, full_name, role, responsibility_summary,
+                        email, phone, avatar_url, display_order
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        member_id,
+                        record.get("fullName", ""),
+                        record.get("role", ""),
+                        record.get("responsibilitySummary", ""),
+                        record.get("email", ""),
+                        record.get("phone", ""),
+                        record.get("avatarUrl", ""),
+                        record.get("displayOrder"),
+                    ),
+                )
+            return self.get_committee_member(member_id)  # type: ignore[return-value]
+
+    def update_committee_member(
+        self, member_id: int, updates: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            existing = self.get_committee_member(member_id)
+            if existing is None:
+                return None
+            merged = {**existing, **copy.deepcopy(updates)}
+            with self._conn:
+                self._conn.execute(
+                    """
+                    UPDATE committee
+                    SET full_name = ?, role = ?, responsibility_summary = ?,
+                        email = ?, phone = ?, avatar_url = ?, display_order = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        merged.get("fullName", ""),
+                        merged.get("role", ""),
+                        merged.get("responsibilitySummary", ""),
+                        merged.get("email", ""),
+                        merged.get("phone", ""),
+                        merged.get("avatarUrl", ""),
+                        merged.get("displayOrder"),
+                        member_id,
+                    ),
+                )
+            return self.get_committee_member(member_id)
+
+    def delete_committee_member(self, member_id: int) -> bool:
+        with self._lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    "DELETE FROM committee WHERE id = ?", (member_id,)
+                )
+                return cur.rowcount > 0
+
+    # --- Posts CRUD ---
+
+    def list_posts(self) -> list[dict[str, Any]]:
+        with self._lock:
+            post_rows = self._conn.execute(
+                "SELECT * FROM posts ORDER BY id ASC"
+            ).fetchall()
+            link_rows = self._conn.execute(
+                "SELECT * FROM media_links WHERE post_id IS NOT NULL ORDER BY id ASC"
+            ).fetchall()
+            links_by_post: dict[int, list[dict[str, Any]]] = {}
+            for link_row in link_rows:
+                pid = int(link_row["post_id"])
+                links_by_post.setdefault(pid, []).append(
+                    self._row_to_media_link(link_row)
+                )
+            return [
+                self._row_to_post(row, links_by_post.get(int(row["id"]), []))
+                for row in post_rows
+            ]
+
+    def get_post(self, post_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM posts WHERE id = ?", (post_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            return self._hydrate_post_unlocked(row)
+
+    def create_post(
+        self, record: dict[str, Any], media_links: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
+        with self._lock:
+            with self._conn:
+                post_id = self._allocate_id("posts")
+                self._conn.execute(
+                    """
+                    INSERT INTO posts (
+                        id, title, summary, category, published_at, event_date, image_url
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        post_id,
+                        record.get("title", ""),
+                        record.get("summary", ""),
+                        record.get("category", "general"),
+                        record.get("publishedAt", ""),
+                        record.get("eventDate", ""),
+                        record.get("imageUrl", ""),
+                    ),
+                )
+                if media_links:
+                    self._replace_post_media_links_unlocked(post_id, media_links)
+            return self.get_post(post_id)  # type: ignore[return-value]
+
+    def update_post(
+        self,
+        post_id: int,
+        updates: dict[str, Any],
+        media_links: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            existing = self.get_post(post_id)
+            if existing is None:
+                return None
+            clean_updates = copy.deepcopy(updates)
+            clean_updates.pop("mediaLinks", None)
+            merged = {**existing, **clean_updates}
+            with self._conn:
+                self._conn.execute(
+                    """
+                    UPDATE posts
+                    SET title = ?, summary = ?, category = ?,
+                        published_at = ?, event_date = ?, image_url = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        merged.get("title", ""),
+                        merged.get("summary", ""),
+                        merged.get("category", "general"),
+                        merged.get("publishedAt", ""),
+                        merged.get("eventDate", ""),
+                        merged.get("imageUrl", ""),
+                        post_id,
+                    ),
+                )
+                if media_links is not None:
+                    self._replace_post_media_links_unlocked(post_id, media_links)
+            return self.get_post(post_id)
+
+    def delete_post(self, post_id: int) -> bool:
+        with self._lock:
+            with self._conn:
+                cur = self._conn.execute("DELETE FROM posts WHERE id = ?", (post_id,))
+                return cur.rowcount > 0
+
+    # --- Media Links CRUD ---
+
+    def list_media_links(self, post_id: int | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            if post_id is None:
+                rows = self._conn.execute(
+                    "SELECT * FROM media_links ORDER BY id ASC"
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT * FROM media_links WHERE post_id = ? ORDER BY id ASC",
+                    (post_id,),
+                ).fetchall()
+            return [self._row_to_media_link(r) for r in rows]
+
+    def get_media_link(self, link_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM media_links WHERE id = ?", (link_id,)
+            ).fetchone()
+            return self._row_to_media_link(row) if row is not None else None
+
+    def create_media_link(self, record: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            with self._conn:
+                link_id = self._allocate_id("media_links")
+                self._conn.execute(
+                    """
+                    INSERT INTO media_links (
+                        id, post_id, media_type, provider, canonical_url,
+                        embed_url, original_url, hosted_externally, title
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        link_id,
+                        record.get("postId"),
+                        record.get("mediaType", "video"),
+                        record.get("provider", ""),
+                        record.get("canonicalUrl", ""),
+                        record.get("embedUrl", ""),
+                        record.get("originalUrl", ""),
+                        1 if record.get("hostedExternally", True) else 0,
+                        record.get("title", ""),
+                    ),
+                )
+            return self.get_media_link(link_id)  # type: ignore[return-value]
+
+    def update_media_link(
+        self, link_id: int, updates: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            existing = self.get_media_link(link_id)
+            if existing is None:
+                return None
+            merged = {**existing, **copy.deepcopy(updates)}
+            with self._conn:
+                self._conn.execute(
+                    """
+                    UPDATE media_links
+                    SET post_id = ?, media_type = ?, provider = ?, canonical_url = ?,
+                        embed_url = ?, original_url = ?, hosted_externally = ?, title = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        merged.get("postId"),
+                        merged.get("mediaType", "video"),
+                        merged.get("provider", ""),
+                        merged.get("canonicalUrl", ""),
+                        merged.get("embedUrl", ""),
+                        merged.get("originalUrl", ""),
+                        1 if merged.get("hostedExternally", True) else 0,
+                        merged.get("title", ""),
+                        link_id,
+                    ),
+                )
+            return self.get_media_link(link_id)
+
+    def delete_media_link(self, link_id: int) -> bool:
+        with self._lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    "DELETE FROM media_links WHERE id = ?", (link_id,)
+                )
+                return cur.rowcount > 0
+
+    # --- Google Forms CRUD ---
+
+    def list_forms(self) -> list[dict[str, Any]]:
+        with self._lock:
+            rows = self._conn.execute(
+                """
+                SELECT * FROM forms
+                ORDER BY COALESCE(display_order, 9999) ASC, id ASC
+                """
+            ).fetchall()
+            return [self._row_to_form(r) for r in rows]
+
+    def get_form(self, form_id: int) -> dict[str, Any] | None:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM forms WHERE id = ?", (form_id,)
+            ).fetchone()
+            return self._row_to_form(row) if row is not None else None
+
+    def create_form(self, record: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            with self._conn:
+                form_id = self._allocate_id("forms")
+                self._conn.execute(
+                    """
+                    INSERT INTO forms (
+                        id, form_type, title, description, canonical_url,
+                        embed_url, provider, form_id, active, display_order
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        form_id,
+                        record.get("formType", "feedback"),
+                        record.get("title", ""),
+                        record.get("description", ""),
+                        record.get("canonicalUrl", ""),
+                        record.get("embedUrl", ""),
+                        record.get("provider", "google_forms"),
+                        record.get("formId", ""),
+                        1 if record.get("active", True) else 0,
+                        record.get("displayOrder"),
+                    ),
+                )
+            return self.get_form(form_id)  # type: ignore[return-value]
+
+    def update_form(
+        self, form_id: int, updates: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        with self._lock:
+            existing = self.get_form(form_id)
+            if existing is None:
+                return None
+            merged = {**existing, **copy.deepcopy(updates)}
+            with self._conn:
+                self._conn.execute(
+                    """
+                    UPDATE forms
+                    SET form_type = ?, title = ?, description = ?, canonical_url = ?,
+                        embed_url = ?, provider = ?, form_id = ?, active = ?, display_order = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        merged.get("formType", "feedback"),
+                        merged.get("title", ""),
+                        merged.get("description", ""),
+                        merged.get("canonicalUrl", ""),
+                        merged.get("embedUrl", ""),
+                        merged.get("provider", "google_forms"),
+                        merged.get("formId", ""),
+                        1 if merged.get("active", True) else 0,
+                        merged.get("displayOrder"),
+                        form_id,
+                    ),
+                )
+            return self.get_form(form_id)
+
+    def delete_form(self, form_id: int) -> bool:
+        with self._lock:
+            with self._conn:
+                cur = self._conn.execute(
+                    "DELETE FROM forms WHERE id = ?", (form_id,)
+                )
+                return cur.rowcount > 0
+
+    def export_snapshot(self) -> dict[str, Any]:
+        """Return a deep-copied JSON-compatible snapshot of all collections and sequence counters."""
+        with self._lock:
+            posts = [
+                {k: v for k, v in p.items() if k != "mediaLinks"}
+                for p in self.list_posts()
+            ]
+            seq_rows = self._conn.execute(
+                "SELECT collection, next_id FROM sequences"
+            ).fetchall()
+            next_ids = {row["collection"]: int(row["next_id"]) for row in seq_rows}
+            return {
+                "committee": self.list_committee(),
+                "posts": posts,
+                "media_links": self.list_media_links(),
+                "forms": self.list_forms(),
+                "next_ids": next_ids,
+            }
+
+    def storage_info(self) -> dict[str, Any]:
+        """Return non-secret storage diagnostics for health/readiness reporting."""
+        with self._lock:
+            size_bytes = 0
+            if self._db_path is not None:
+                if self._db_path.is_file():
+                    size_bytes += self._db_path.stat().st_size
+                for suffix in ("-wal", "-shm"):
+                    sidecar = Path(f"{self._db_path}{suffix}")
+                    if sidecar.is_file():
+                        size_bytes += sidecar.stat().st_size
+
+            counts = {
+                "committee": int(
+                    self._conn.execute("SELECT COUNT(*) FROM committee").fetchone()[0]
+                ),
+                "posts": int(
+                    self._conn.execute("SELECT COUNT(*) FROM posts").fetchone()[0]
+                ),
+                "mediaLinks": int(
+                    self._conn.execute("SELECT COUNT(*) FROM media_links").fetchone()[0]
+                ),
+                "forms": int(
+                    self._conn.execute("SELECT COUNT(*) FROM forms").fetchone()[0]
+                ),
+            }
+            return {
+                "backend": "sqlite",
+                "persisted": not self._is_memory,
+                "sizeBytes": int(size_bytes),
+                "counts": counts,
+            }
+
+
+def _parse_sqlite_database_url(database_url: str) -> str:
+    raw = database_url.strip()
+    if raw == "sqlite:///:memory:":
+        return ":memory:"
+    parsed = urlsplit(raw)
+    if parsed.scheme.lower() != "sqlite":
+        raise ValueError(
+            f"Unsupported database URL scheme '{parsed.scheme}'. Only sqlite:/// URLs are supported."
+        )
+    if parsed.netloc and parsed.netloc not in ("", "localhost"):
+        raise ValueError("Remote host is not supported in sqlite:/// URLs.")
+    path = unquote(parsed.path or "")
+    if raw.startswith("sqlite:////"):
+        return path
+    if raw.startswith("sqlite:///"):
+        # Relative path after sqlite:///
+        return path.lstrip("/") if not path.startswith("//") else path
+    if path in ("/:memory:", ":memory:", ""):
+        return ":memory:"
+    return path
+
+
+def create_cms_store(
+    default_committee: list[dict[str, Any]],
+    default_posts: list[dict[str, Any]],
+    default_forms: list[dict[str, Any]] | None = None,
+    *,
+    data_file: str | Path | None = None,
+    storage_backend: str = "auto",
+    database_url: str | None = None,
+) -> CMSStore | SQLiteCMSStore:
+    """Instantiate either CMSStore (JSON) or SQLiteCMSStore based on free-tier config."""
+    backend = (storage_backend or "auto").strip().lower()
+    if backend not in ("auto", "json", "sqlite"):
+        raise ValueError(
+            f"Unsupported storage backend '{storage_backend}'. Allowed: auto, json, sqlite."
+        )
+
+    cleaned_url = (database_url or "").strip()
+    if cleaned_url:
+        sqlite_target = _parse_sqlite_database_url(cleaned_url)
+        if backend == "json":
+            raise ValueError("Cannot use sqlite DATABASE_URL with storage_backend='json'.")
+        return SQLiteCMSStore(
+            default_committee,
+            default_posts,
+            default_forms,
+            db_path=sqlite_target,
+        )
+
+    if backend == "sqlite":
+        target: str | Path = data_file if data_file else ":memory:"
+        return SQLiteCMSStore(
+            default_committee,
+            default_posts,
+            default_forms,
+            db_path=target,
+        )
+
+    if backend == "auto" and data_file is not None:
+        ext = Path(str(data_file)).suffix.lower()
+        if ext in (".db", ".sqlite", ".sqlite3"):
+            return SQLiteCMSStore(
+                default_committee,
+                default_posts,
+                default_forms,
+                db_path=data_file,
+            )
+
+    return CMSStore(
+        default_committee,
+        default_posts,
+        default_forms,
+        data_file=data_file,
+    )
+
+
+def migrate_json_to_sqlite(
+    json_path: str | Path, sqlite_path: str | Path
+) -> dict[str, int]:
+    """Migrate an existing JSON CMSStore file into a SQLiteCMSStore database."""
+    source_path = Path(json_path)
+    if not source_path.is_file():
+        raise FileNotFoundError(f"JSON CMS store file not found: {source_path}")
+
+    json_store = CMSStore([], [], [], data_file=source_path)
+    snapshot = json_store.export_snapshot()
+
+    sqlite_store = SQLiteCMSStore([], [], [], db_path=sqlite_path)
+    try:
+        with sqlite_store._lock:
+            with sqlite_store._conn:
+                sqlite_store._write_snapshot_unlocked(snapshot)
+        counts = sqlite_store.storage_info()["counts"]
+    finally:
+        sqlite_store.close()
+
+    return counts

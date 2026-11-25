@@ -1,4 +1,5 @@
 import { sanitizeAdminText, validateGoogleFormUrl } from './adminValidation.js';
+import { buildApiUrl, resolveApiBaseUrl } from './apiConfig.js';
 
 export const ENGAGEMENT_FORM_META = {
   feedback: {
@@ -161,7 +162,7 @@ export function normalizeAndFilterEngagementForms(
  */
 export async function fetchPublicEngagementForms(
   fetchImpl = globalThis.fetch,
-  { formType = 'all' } = {}
+  { formType = 'all', baseUrl = resolveApiBaseUrl() } = {}
 ) {
   if (typeof fetchImpl !== 'function') {
     throw new Error('Fetch implementation is required to load public forms.');
@@ -176,7 +177,7 @@ export async function fetchPublicEngagementForms(
       ? `/api/forms?type=${encodeURIComponent(normalizedType)}`
       : '/api/forms';
 
-  const response = await fetchImpl(endpoint, {
+  const response = await fetchImpl(buildApiUrl(endpoint, baseUrl), {
     method: 'GET',
     headers: {
       Accept: 'application/json',

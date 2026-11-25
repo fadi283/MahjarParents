@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:verify": "node scripts/verify-dist.js",
     "preview": "vite preview",
     "test": "node scripts/run-tests.js"
   },

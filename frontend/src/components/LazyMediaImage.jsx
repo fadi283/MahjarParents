@@ -1,4 +1,5 @@
 import React from 'react';
+import { API_BASE_URL, resolveMediaUrl } from '../utils/apiConfig.js';
 import { sanitizeImageUrl } from '../utils/mediaEmbeds.js';
 
 export default function LazyMediaImage({
@@ -9,9 +10,11 @@ export default function LazyMediaImage({
   caption = '',
   width,
   height,
+  apiBaseUrl = API_BASE_URL,
 }) {
   const safeSrc = sanitizeImageUrl(src);
   if (!safeSrc) return null;
+  const resolvedSrc = resolveMediaUrl(safeSrc, apiBaseUrl);
 
   const trimmedCaption = typeof caption === 'string' ? caption.trim() : '';
   const imgClassName = ['lazy-media-image__img', className]
@@ -20,7 +23,7 @@ export default function LazyMediaImage({
 
   const imgElement = (
     <img
-      src={safeSrc}
+      src={resolvedSrc}
       alt={alt}
       loading="lazy"
       decoding="async"
@@ -39,7 +42,7 @@ export default function LazyMediaImage({
     .join(' ');
 
   return (
-    <figure className={wrapperClassName}>
+    <figure dir="rtl" className={wrapperClassName}>
       {imgElement}
       <figcaption className="lazy-media-image__caption">
         {trimmedCaption}

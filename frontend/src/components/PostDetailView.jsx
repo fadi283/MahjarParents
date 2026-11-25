@@ -46,7 +46,12 @@ export default function PostDetailView({ post, onClose, shareBaseUrl }) {
             العودة إلى قائمة الإعلانات
           </button>
         )}
-        <ShareActions item={post} entityType="post" baseUrl={shareBaseUrl} />
+        <ShareActions
+          item={post}
+          entityType="post"
+          baseUrl={shareBaseUrl}
+          menuAlign="end"
+        />
       </div>
 
       <header className="post-detail__header">

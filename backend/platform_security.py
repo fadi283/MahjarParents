@@ -37,7 +37,21 @@ DEFAULT_CORS_EXPOSED_HEADERS = (
     "X-RateLimit-Reset",
     "Retry-After",
 )
-DEFAULT_HTTPS_EXEMPT_PATHS = ("/api/health",)
+DEFAULT_HTTPS_EXEMPT_PATHS = ("/api/health", "/api/ready")
+FRONTEND_HTML_CSP = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "img-src 'self' https: data:; "
+    "font-src 'self' https://fonts.gstatic.com data:; "
+    "connect-src 'self' https:; "
+    "frame-src 'self' https://docs.google.com https://www.youtube-nocookie.com "
+    "https://player.vimeo.com https://w.soundcloud.com https://drive.google.com; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'; "
+    "frame-ancestors 'none'"
+)
 
 _WEAK_SECRET_PREFIXES = (
     "dev",
@@ -459,7 +473,10 @@ def _classify_rate_limit_route(
 
 
 def _append_vary_headers(response: Response, tokens: tuple[str, ...]) -> None:
-    existing_raw = response.headers.get("Vary", "")
+    existing_raw = response.headers.get("Vary")
+    if not existing_raw:
+        response.headers["Vary"] = ", ".join(tokens)
+        return
     existing = [part.strip() for part in existing_raw.split(",") if part.strip()]
     existing_lower = {part.lower() for part in existing}
     for token in tokens:
@@ -525,6 +542,25 @@ def configure_platform_security(
     exempt_https_paths = frozenset(
         flask_app.config.get("HTTPS_EXEMPT_PATHS") or DEFAULT_HTTPS_EXEMPT_PATHS
     )
+    enforce_https = bool(flask_app.config.get("ENFORCE_HTTPS"))
+    max_query_len = parse_int(
+        flask_app.config.get("MAX_QUERY_PARAM_LENGTH", 2048), 2048, min_value=1
+    )
+    max_json_bytes = parse_int(
+        flask_app.config.get("MAX_JSON_BODY_BYTES", 64 * 1024),
+        64 * 1024,
+        min_value=64,
+    )
+    max_json_depth = parse_int(
+        flask_app.config.get("MAX_JSON_DEPTH", 8), 8, min_value=1
+    )
+    rate_limit_enabled = bool(flask_app.config.get("RATE_LIMIT_ENABLED", True))
+    hsts_age = parse_int(
+        flask_app.config.get("HSTS_MAX_AGE", 31536000), 31536000, min_value=0
+    )
+    hsts_header_val = f"max-age={hsts_age}; includeSubDomains"
+    if bool(flask_app.config.get("HSTS_PRELOAD")):
+        hsts_header_val += "; preload"
 
     @flask_app.before_request
     def _platform_security_before_request():
@@ -533,7 +569,7 @@ def configure_platform_security(
 
         # 1. HTTPS enforcement
         if (
-            bool(flask_app.config.get("ENFORCE_HTTPS"))
+            enforce_https
             and not request.is_secure
             and request.path not in exempt_https_paths
         ):
@@ -617,19 +653,12 @@ def configure_platform_security(
                 )
 
         # 3. Input guardrails (query params & JSON payloads)
-        max_query_len = parse_int(
-            flask_app.config.get("MAX_QUERY_PARAM_LENGTH", 2048), 2048, min_value=1
-        )
-        validate_query_params(request.args, max_length=max_query_len)
+        if request.args:
+            validate_query_params(request.args, max_length=max_query_len)
 
         if request.method in ("POST", "PUT", "PATCH"):
             content_type = (request.mimetype or "").lower()
             if not content_type.startswith("multipart/form-data"):
-                max_json_bytes = parse_int(
-                    flask_app.config.get("MAX_JSON_BODY_BYTES", 64 * 1024),
-                    64 * 1024,
-                    min_value=64,
-                )
                 if request.content_length is not None and request.content_length > max_json_bytes:
                     return (
                         jsonify({
@@ -650,13 +679,10 @@ def configure_platform_security(
                 if raw_body and (request.is_json or content_type == "application/json"):
                     parsed = request.get_json(silent=True)
                     if parsed is not None:
-                        max_depth = parse_int(
-                            flask_app.config.get("MAX_JSON_DEPTH", 8), 8, min_value=1
-                        )
-                        validate_json_structure(parsed, max_depth=max_depth)
+                        validate_json_structure(parsed, max_depth=max_json_depth)
 
         # 4. Rate limiting on auth and write routes
-        if bool(flask_app.config.get("RATE_LIMIT_ENABLED", True)):
+        if rate_limit_enabled:
             bucket_spec = _classify_rate_limit_route(
                 request.path, request.method, flask_app.config
             )
@@ -696,9 +722,15 @@ def configure_platform_security(
             "Permissions-Policy",
             "camera=(), microphone=(), geolocation=(), interest-cohort=()",
         )
+        is_html_spa_response = (
+            not request.path.startswith("/api/")
+            and (response.mimetype or "").lower() == "text/html"
+        )
         response.headers.setdefault(
             "Content-Security-Policy",
-            "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+            FRONTEND_HTML_CSP
+            if is_html_spa_response
+            else "default-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
         )
         response.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
 
@@ -709,14 +741,8 @@ def configure_platform_security(
         else:
             response.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
 
-        if bool(flask_app.config.get("ENFORCE_HTTPS")) or request.is_secure:
-            hsts_age = parse_int(
-                flask_app.config.get("HSTS_MAX_AGE", 31536000), 31536000, min_value=0
-            )
-            hsts_val = f"max-age={hsts_age}; includeSubDomains"
-            if bool(flask_app.config.get("HSTS_PRELOAD")):
-                hsts_val += "; preload"
-            response.headers.setdefault("Strict-Transport-Security", hsts_val)
+        if enforce_https or request.is_secure:
+            response.headers.setdefault("Strict-Transport-Security", hsts_header_val)
 
         if request.path.startswith("/api/admin/"):
             response.headers["Cache-Control"] = "no-store"

@@ -7,6 +7,8 @@ import { TOUCH_TARGET_STYLE } from './components/admin/adminShared.jsx';
 import { defaultAnnouncementsPosts } from './data/announcementsPosts.js';
 import { defaultCommitteeMembers } from './data/committeeMembers.js';
 import { defaultEngagementForms } from './data/engagementForms.js';
+import { API_BASE_URL, buildApiUrl } from './utils/apiConfig.js';
+import { enforceDocumentRtl, RTL_ROOT_ATTRIBUTES } from './utils/rtlLayout.js';
 import './styles.css';
 
 function resolveInitialView(explicitView) {
@@ -32,6 +34,10 @@ export default function App({
   const [liveMembers, setLiveMembers] = useState(members);
   const [livePosts, setLivePosts] = useState(posts);
   const [liveForms, setLiveForms] = useState(forms);
+
+  useEffect(() => {
+    enforceDocumentRtl();
+  }, []);
 
   useEffect(() => {
     setLiveMembers(members);
@@ -78,21 +84,30 @@ export default function App({
         const requests = [];
         if (usesDefaultMembers) {
           requests.push(
-            fetch('/api/committee').then((r) => (r.ok ? r.json() : null))
+            (API_BASE_URL
+              ? fetch(buildApiUrl('/api/committee'))
+              : fetch('/api/committee')
+            ).then((r) => (r.ok ? r.json() : null))
           );
         } else {
           requests.push(Promise.resolve(null));
         }
         if (usesDefaultPosts) {
           requests.push(
-            fetch('/api/posts').then((r) => (r.ok ? r.json() : null))
+            (API_BASE_URL
+              ? fetch(buildApiUrl('/api/posts'))
+              : fetch('/api/posts')
+            ).then((r) => (r.ok ? r.json() : null))
           );
         } else {
           requests.push(Promise.resolve(null));
         }
         if (usesDefaultForms) {
           requests.push(
-            fetch('/api/forms').then((r) => (r.ok ? r.json() : null))
+            (API_BASE_URL
+              ? fetch(buildApiUrl('/api/forms'))
+              : fetch('/api/forms')
+            ).then((r) => (r.ok ? r.json() : null))
           );
         } else {
           requests.push(Promise.resolve(null));
@@ -150,7 +165,7 @@ export default function App({
   }, []);
 
   return (
-    <main dir="rtl" className="app-container">
+    <main {...RTL_ROOT_ATTRIBUTES} className="app-container">
       <header className="app-header">
         <div className="app-header__inner app-header__brand">
           <div className="app-header__text">
@@ -161,7 +176,7 @@ export default function App({
             <p className="app-header__subtitle">
               المنصة الرقمية للتواصل المجتمعي والشراكة التربوية مع الأهالي
             </p>
-            <div className="app-header__nav">
+            <nav className="app-header__nav" aria-label="التنقل السريع">
               {view === 'admin' ? (
                 <button
                   type="button"
@@ -190,7 +205,7 @@ export default function App({
                   </button>
                 </>
               )}
-            </div>
+            </nav>
           </div>
           <div className="app-header__logo-wrapper">
             <img

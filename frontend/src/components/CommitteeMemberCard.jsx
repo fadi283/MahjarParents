@@ -1,6 +1,7 @@
 import React from 'react';
+import { API_BASE_URL, resolveMediaUrl } from '../utils/apiConfig.js';
 
-export default function CommitteeMemberCard({ member }) {
+export default function CommitteeMemberCard({ member, apiBaseUrl = API_BASE_URL }) {
   if (!member) return null;
 
   const fullName = member.fullName ?? member.full_name ?? '';
@@ -12,6 +13,9 @@ export default function CommitteeMemberCard({ member }) {
     member.email ?? member.contactUrl ?? member.contact_url ?? '';
 
   const hasAvatar = Boolean(avatarUrl && avatarUrl.trim());
+  const resolvedAvatarUrl = hasAvatar
+    ? resolveMediaUrl(avatarUrl.trim(), apiBaseUrl)
+    : '';
   const trimmedEmail = rawEmail ? rawEmail.trim() : '';
   const hasEmail = Boolean(trimmedEmail);
   const contactHref = hasEmail
@@ -35,7 +39,7 @@ export default function CommitteeMemberCard({ member }) {
         {hasAvatar && (
           <div className="committee-card__avatar-wrapper">
             <img
-              src={avatarUrl}
+              src={resolvedAvatarUrl}
               alt={`صورة ${fullName} - ${role}`}
               loading="lazy"
               className="committee-card__avatar"

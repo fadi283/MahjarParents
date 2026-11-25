@@ -6,11 +6,13 @@ import json
 import math
 import os
 import secrets
+import threading
 import time
 from urllib.parse import urlsplit
 from flask import (
     Flask,
     Response,
+    abort,
     current_app,
     g,
     has_app_context,
@@ -38,14 +40,17 @@ from cms_security import (
     validate_positive_int_field,
     verify_admin_credentials,
 )
-from cms_store import ALLOWED_FORM_TYPES, CMSStore, DEFAULT_GOOGLE_FORMS
+from cms_store import ALLOWED_FORM_TYPES, CMSStore, DEFAULT_GOOGLE_FORMS, create_cms_store
 from media_pipeline import (
+    DEFAULT_MAX_MEDIA_STORAGE_BYTES,
     DEFAULT_OUTPUT_FORMAT,
     MAX_IMAGE_HEIGHT,
     MAX_IMAGE_UPLOAD_BYTES,
     MAX_IMAGE_WIDTH,
     MediaValidationError,
+    RAW_AV_EXTENSIONS,
     SAFE_ASSET_FILENAME_RE,
+    inspect_media_storage,
     optimize_image,
     sanitize_external_media_links,
     save_optimized_image,
@@ -67,6 +72,13 @@ from platform_security import (
 COMMITTEE_CACHE_TTL_SECONDS = 300
 POSTS_CACHE_TTL_SECONDS = 300
 FORMS_CACHE_TTL_SECONDS = 300
+MAX_CACHE_RESPONSE_ENTRIES = 256
+MAX_CACHED_MEDIA_ASSET_BYTES = 256 * 1024
+MAX_CACHED_MEDIA_ASSETS = 64
+_media_asset_cache: dict[tuple[str, str], bytes] = {}
+_media_asset_cache_lock = threading.Lock()
+_spa_index_cache: dict[str, tuple[int, bytes]] = {}
+_spa_index_cache_lock = threading.Lock()
 _FORM_TYPE_PRIORITY = {
     "feedback": 1,
     "help_request": 2,
@@ -248,7 +260,17 @@ _committee_cache = {
     "etag": None,
     "expires_at": 0.0,
     "store_id": None,
+    "generation": 0,
 }
+_committee_cache_lock = threading.Lock()
+
+
+def _cache_bounded_response(responses_dict: dict, cache_key, entry) -> None:
+    """Insert a cached response entry while capping dictionary size for free-tier RAM."""
+    if cache_key not in responses_dict and len(responses_dict) >= MAX_CACHE_RESPONSE_ENTRIES:
+        oldest_key = next(iter(responses_dict))
+        responses_dict.pop(oldest_key, None)
+    responses_dict[cache_key] = entry
 
 
 def _current_store_id():
@@ -259,10 +281,12 @@ def _current_store_id():
 
 def clear_committee_cache():
     """Invalidate the in-memory committee directory cache."""
-    _committee_cache["payload_bytes"] = None
-    _committee_cache["etag"] = None
-    _committee_cache["expires_at"] = 0.0
-    _committee_cache["store_id"] = None
+    with _committee_cache_lock:
+        _committee_cache["payload_bytes"] = None
+        _committee_cache["etag"] = None
+        _committee_cache["expires_at"] = 0.0
+        _committee_cache["store_id"] = None
+        _committee_cache["generation"] += 1
 
 
 def load_committee_members():
@@ -391,26 +415,27 @@ def _build_cached_json_response(
 
 def _get_cached_committee_response():
     """Return (payload_bytes, etag) from in-memory cache or build and cache it."""
-    now = time.monotonic()
-    store_id = _current_store_id()
-    if (
-        _committee_cache["payload_bytes"] is not None
-        and _committee_cache["etag"] is not None
-        and _committee_cache["store_id"] == store_id
-        and now < _committee_cache["expires_at"]
-    ):
-        return _committee_cache["payload_bytes"], _committee_cache["etag"]
+    with _committee_cache_lock:
+        now = time.monotonic()
+        store_id = _current_store_id()
+        if (
+            _committee_cache["payload_bytes"] is not None
+            and _committee_cache["etag"] is not None
+            and _committee_cache["store_id"] == store_id
+            and now < _committee_cache["expires_at"]
+        ):
+            return _committee_cache["payload_bytes"], _committee_cache["etag"]
 
-    raw_records = load_committee_members()
-    ordered_records = _normalize_and_order_committee_members(raw_records)
-    payload_bytes, etag = _serialize_json_and_etag(ordered_records)
+        raw_records = load_committee_members()
+        ordered_records = _normalize_and_order_committee_members(raw_records)
+        payload_bytes, etag = _serialize_json_and_etag(ordered_records)
 
-    _committee_cache["payload_bytes"] = payload_bytes
-    _committee_cache["etag"] = etag
-    _committee_cache["expires_at"] = now + COMMITTEE_CACHE_TTL_SECONDS
-    _committee_cache["store_id"] = store_id
+        _committee_cache["payload_bytes"] = payload_bytes
+        _committee_cache["etag"] = etag
+        _committee_cache["expires_at"] = now + COMMITTEE_CACHE_TTL_SECONDS
+        _committee_cache["store_id"] = store_id
 
-    return payload_bytes, etag
+        return payload_bytes, etag
 
 
 _posts_cache = {
@@ -418,15 +443,19 @@ _posts_cache = {
     "responses": {},
     "expires_at": 0.0,
     "store_id": None,
+    "generation": 0,
 }
+_posts_cache_lock = threading.Lock()
 
 
 def clear_posts_cache():
     """Invalidate the in-memory announcements and events feed cache."""
-    _posts_cache["ordered_records"] = None
-    _posts_cache["responses"] = {}
-    _posts_cache["expires_at"] = 0.0
-    _posts_cache["store_id"] = None
+    with _posts_cache_lock:
+        _posts_cache["ordered_records"] = None
+        _posts_cache["responses"] = {}
+        _posts_cache["expires_at"] = 0.0
+        _posts_cache["store_id"] = None
+        _posts_cache["generation"] += 1
 
 
 def load_posts():
@@ -521,23 +550,31 @@ def _normalize_and_order_posts(records):
     return [record for _, record in normalized_items]
 
 
+def _get_cached_ordered_posts_with_generation():
+    """Return (ordered_records, cache_generation) safely under the posts cache lock."""
+    with _posts_cache_lock:
+        now = time.monotonic()
+        store_id = _current_store_id()
+        if (
+            _posts_cache["ordered_records"] is not None
+            and _posts_cache["store_id"] == store_id
+            and now < _posts_cache["expires_at"]
+        ):
+            return _posts_cache["ordered_records"], _posts_cache["generation"]
+
+        raw_records = load_posts()
+        ordered_records = _normalize_and_order_posts(raw_records)
+        _posts_cache["ordered_records"] = ordered_records
+        _posts_cache["responses"] = {}
+        _posts_cache["expires_at"] = now + POSTS_CACHE_TTL_SECONDS
+        _posts_cache["store_id"] = store_id
+        _posts_cache["generation"] += 1
+        return ordered_records, _posts_cache["generation"]
+
+
 def _get_cached_ordered_posts():
     """Return normalized, newest-first posts list from in-memory cache or build it."""
-    now = time.monotonic()
-    store_id = _current_store_id()
-    if (
-        _posts_cache["ordered_records"] is not None
-        and _posts_cache["store_id"] == store_id
-        and now < _posts_cache["expires_at"]
-    ):
-        return _posts_cache["ordered_records"]
-
-    raw_records = load_posts()
-    ordered_records = _normalize_and_order_posts(raw_records)
-    _posts_cache["ordered_records"] = ordered_records
-    _posts_cache["responses"] = {}
-    _posts_cache["expires_at"] = now + POSTS_CACHE_TTL_SECONDS
-    _posts_cache["store_id"] = store_id
+    ordered_records, _ = _get_cached_ordered_posts_with_generation()
     return ordered_records
 
 
@@ -624,15 +661,19 @@ _forms_cache = {
     "responses": {},
     "expires_at": 0.0,
     "store_id": None,
+    "generation": 0,
 }
+_forms_cache_lock = threading.Lock()
 
 
 def clear_forms_cache():
     """Invalidate the in-memory active Google Forms configuration cache."""
-    _forms_cache["active_records"] = None
-    _forms_cache["responses"] = {}
-    _forms_cache["expires_at"] = 0.0
-    _forms_cache["store_id"] = None
+    with _forms_cache_lock:
+        _forms_cache["active_records"] = None
+        _forms_cache["responses"] = {}
+        _forms_cache["expires_at"] = 0.0
+        _forms_cache["store_id"] = None
+        _forms_cache["generation"] += 1
 
 
 def load_forms():
@@ -719,33 +760,47 @@ def _normalize_and_filter_active_forms(records):
     return [record for _, record in normalized_items]
 
 
+def _get_cached_active_forms_with_generation():
+    """Return (active_records, cache_generation) safely under the forms cache lock."""
+    with _forms_cache_lock:
+        now = time.monotonic()
+        store_id = _current_store_id()
+        if (
+            _forms_cache["active_records"] is not None
+            and _forms_cache["store_id"] == store_id
+            and now < _forms_cache["expires_at"]
+        ):
+            return _forms_cache["active_records"], _forms_cache["generation"]
+
+        raw_records = load_forms()
+        active_records = _normalize_and_filter_active_forms(raw_records)
+        _forms_cache["active_records"] = active_records
+        _forms_cache["responses"] = {}
+        _forms_cache["expires_at"] = now + FORMS_CACHE_TTL_SECONDS
+        _forms_cache["store_id"] = store_id
+        _forms_cache["generation"] += 1
+        return active_records, _forms_cache["generation"]
+
+
 def _get_cached_active_forms():
     """Return normalized, active, trusted Google Forms list from cache or build it."""
-    now = time.monotonic()
-    store_id = _current_store_id()
-    if (
-        _forms_cache["active_records"] is not None
-        and _forms_cache["store_id"] == store_id
-        and now < _forms_cache["expires_at"]
-    ):
-        return _forms_cache["active_records"]
-
-    raw_records = load_forms()
-    active_records = _normalize_and_filter_active_forms(raw_records)
-    _forms_cache["active_records"] = active_records
-    _forms_cache["responses"] = {}
-    _forms_cache["expires_at"] = now + FORMS_CACHE_TTL_SECONDS
-    _forms_cache["store_id"] = store_id
+    active_records, _ = _get_cached_active_forms_with_generation()
     return active_records
 
 
 def _build_public_forms_response(form_type: str, envelope_flag: bool) -> Response:
     """Build cached HTTP JSON/304 response for public Google Forms endpoints."""
-    active_forms = _get_cached_active_forms()
+    active_forms, generation = _get_cached_active_forms_with_generation()
     filter_key = form_type if form_type and form_type != "all" else "all"
     cache_key = (filter_key, envelope_flag)
 
-    cached_entry = _forms_cache["responses"].get(cache_key)
+    with _forms_cache_lock:
+        cached_entry = (
+            _forms_cache["responses"].get(cache_key)
+            if _forms_cache["generation"] == generation
+            else None
+        )
+
     if cached_entry is not None:
         payload_bytes, etag, total_count = cached_entry
     else:
@@ -770,7 +825,13 @@ def _build_public_forms_response(form_type: str, envelope_flag: bool) -> Respons
             response_data = filtered
 
         payload_bytes, etag = _serialize_json_and_etag(response_data)
-        _forms_cache["responses"][cache_key] = (payload_bytes, etag, total_count)
+        with _forms_cache_lock:
+            if _forms_cache["generation"] == generation:
+                _cache_bounded_response(
+                    _forms_cache["responses"],
+                    cache_key,
+                    (payload_bytes, etag, total_count),
+                )
 
     return _build_cached_json_response(
         payload_bytes,
@@ -1155,13 +1216,42 @@ def create_app(test_config=None):
         else DEFAULT_HTTPS_EXEMPT_PATHS
     )
 
-    default_upload_dir = _get_setting("MAHJAR_MEDIA_UPLOAD_DIR") or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "uploads", "images"
+    backend_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(backend_dir)
+
+    data_dir = (
+        (test_config.get("DATA_DIR") if test_config and "DATA_DIR" in test_config else None)
+        or _get_setting("MAHJAR_DATA_DIR")
+    ).strip()
+
+    storage_backend = (
+        (test_config.get("STORAGE_BACKEND") if test_config and "STORAGE_BACKEND" in test_config else None)
+        or _get_setting("MAHJAR_STORAGE_BACKEND")
+        or "auto"
+    ).strip().lower()
+
+    database_url = (
+        (test_config.get("DATABASE_URL") if test_config and "DATABASE_URL" in test_config else None)
+        or _get_setting("MAHJAR_DATABASE_URL")
+    ).strip()
+
+    default_upload_dir = (
+        _get_setting("MAHJAR_MEDIA_UPLOAD_DIR")
+        or (os.path.join(data_dir, "uploads", "images") if data_dir else "")
+        or os.path.join(backend_dir, "uploads", "images")
+    )
+
+    default_frontend_dist = (
+        _get_setting("MAHJAR_FRONTEND_DIST_DIR")
+        or os.path.join(project_root, "frontend", "dist")
     )
 
     flask_app = Flask(__name__)
     flask_app.config.update({
         "MAHJAR_ENV": mahjar_env,
+        "DATA_DIR": data_dir,
+        "STORAGE_BACKEND": storage_backend,
+        "DATABASE_URL": database_url,
         "SECRET_KEY": default_secret_key,
         "SECRET_KEY_FALLBACKS": fallback_keys,
         "ADMIN_USERNAME": _get_setting("MAHJAR_ADMIN_USERNAME", "admin"),
@@ -1245,9 +1335,18 @@ def create_app(test_config=None):
         ),
         "MEDIA_UPLOAD_DIR": default_upload_dir,
         "MAX_IMAGE_UPLOAD_BYTES": MAX_IMAGE_UPLOAD_BYTES,
+        "MAX_MEDIA_STORAGE_BYTES": parse_int(
+            _get_setting("MAHJAR_MAX_MEDIA_STORAGE_BYTES"),
+            DEFAULT_MAX_MEDIA_STORAGE_BYTES,
+            min_value=1024,
+        ),
         "IMAGE_MAX_WIDTH": MAX_IMAGE_WIDTH,
         "IMAGE_MAX_HEIGHT": MAX_IMAGE_HEIGHT,
         "IMAGE_DEFAULT_FORMAT": DEFAULT_OUTPUT_FORMAT,
+        "SERVE_FRONTEND_DIST": parse_bool(
+            _get_setting("MAHJAR_SERVE_FRONTEND"), default=False
+        ),
+        "FRONTEND_DIST_DIR": default_frontend_dist,
     })
 
     if test_config:
@@ -1259,18 +1358,30 @@ def create_app(test_config=None):
         cms_data_file = flask_app.config["CMS_DATA_FILE"]
     elif _get_setting("MAHJAR_CMS_DATA_FILE"):
         cms_data_file = _get_setting("MAHJAR_CMS_DATA_FILE")
-    elif not flask_app.config.get("TESTING"):
-        cms_data_file = os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "instance", "cms_data.json"
+    elif flask_app.config.get("DATA_DIR"):
+        default_filename = (
+            "cms_data.sqlite3"
+            if flask_app.config.get("STORAGE_BACKEND") == "sqlite"
+            else "cms_data.json"
         )
+        cms_data_file = os.path.join(flask_app.config["DATA_DIR"], default_filename)
+    elif not flask_app.config.get("TESTING"):
+        default_filename = (
+            "cms_data.sqlite3"
+            if flask_app.config.get("STORAGE_BACKEND") == "sqlite"
+            else "cms_data.json"
+        )
+        cms_data_file = os.path.join(backend_dir, "instance", default_filename)
     else:
         cms_data_file = None
 
-    flask_app.extensions["cms_store"] = CMSStore(
+    flask_app.extensions["cms_store"] = create_cms_store(
         DEFAULT_COMMITTEE_MEMBERS,
         DEFAULT_POSTS,
         DEFAULT_GOOGLE_FORMS,
         data_file=cms_data_file,
+        storage_backend=flask_app.config["STORAGE_BACKEND"],
+        database_url=flask_app.config["DATABASE_URL"] or None,
     )
     flask_app.extensions["revoked_admin_ids"] = set()
 
@@ -1320,6 +1431,38 @@ def create_app(test_config=None):
             "status": "ok",
             "service": "MahjarParents Backend API",
         })
+
+    @flask_app.route("/api/ready", methods=["GET"])
+    def readiness_check():
+        store = _get_store()
+        storage_diag = (
+            store.storage_info()
+            if hasattr(store, "storage_info")
+            else {"backend": "json", "persisted": False, "sizeBytes": 0, "counts": {}}
+        )
+        media_stats = inspect_media_storage(flask_app.config["MEDIA_UPLOAD_DIR"])
+        dist_dir = os.path.abspath(flask_app.config["FRONTEND_DIST_DIR"])
+        dist_ready = bool(
+            flask_app.config.get("SERVE_FRONTEND_DIST")
+            and os.path.isfile(os.path.join(dist_dir, "index.html"))
+        )
+        resp = jsonify({
+            "status": "ready",
+            "service": "MahjarParents Backend API",
+            "storage": storage_diag,
+            "media": {
+                "assetCount": media_stats["assetCount"],
+                "usedBytes": media_stats["usedBytes"],
+                "maxStorageBytes": int(flask_app.config["MAX_MEDIA_STORAGE_BYTES"]),
+                "disallowedFiles": media_stats["disallowedFiles"],
+                "rawAvStorageAllowed": False,
+            },
+            "frontend": {
+                "servedByFlask": dist_ready,
+            },
+        })
+        resp.headers["Cache-Control"] = "no-store"
+        return resp, 200
 
     @flask_app.route("/api/committee", methods=["GET"])
     def get_committee():
@@ -1374,7 +1517,7 @@ def create_app(test_config=None):
             "yes",
         )
 
-        ordered_posts = _get_cached_ordered_posts()
+        ordered_posts, generation = _get_cached_ordered_posts_with_generation()
 
         effective_limit = limit_val or per_page_val
         if effective_limit is not None:
@@ -1397,7 +1540,13 @@ def create_app(test_config=None):
             page_val,
             envelope_flag,
         )
-        cached_entry = _posts_cache["responses"].get(cache_key)
+        with _posts_cache_lock:
+            cached_entry = (
+                _posts_cache["responses"].get(cache_key)
+                if _posts_cache["generation"] == generation
+                else None
+            )
+
         if cached_entry is not None:
             payload_bytes, etag, total_count, has_more = cached_entry
         else:
@@ -1446,12 +1595,13 @@ def create_app(test_config=None):
                 response_data = sliced
 
             payload_bytes, etag = _serialize_json_and_etag(response_data)
-            _posts_cache["responses"][cache_key] = (
-                payload_bytes,
-                etag,
-                total_count,
-                has_more,
-            )
+            with _posts_cache_lock:
+                if _posts_cache["generation"] == generation:
+                    _cache_bounded_response(
+                        _posts_cache["responses"],
+                        cache_key,
+                        (payload_bytes, etag, total_count, has_more),
+                    )
 
         return _build_cached_json_response(
             payload_bytes,
@@ -1601,7 +1751,11 @@ def create_app(test_config=None):
                 quality=quality_raw,
                 max_bytes=int(flask_app.config["MAX_IMAGE_UPLOAD_BYTES"]),
             )
-            save_optimized_image(result, flask_app.config["MEDIA_UPLOAD_DIR"])
+            save_optimized_image(
+                result,
+                flask_app.config["MEDIA_UPLOAD_DIR"],
+                max_storage_bytes=int(flask_app.config["MAX_MEDIA_STORAGE_BYTES"]),
+            )
         except MediaValidationError as exc:
             return jsonify({"error": str(exc), "code": exc.code}), exc.status_code
 
@@ -1623,6 +1777,23 @@ def create_app(test_config=None):
             )
 
         upload_dir = os.path.abspath(flask_app.config["MEDIA_UPLOAD_DIR"])
+        cache_key = (upload_dir, filename)
+        mimetype = "image/webp" if filename.endswith(".webp") else "image/jpeg"
+
+        with _media_asset_cache_lock:
+            cached_bytes = _media_asset_cache.get(cache_key)
+
+        if cached_bytes is not None:
+            return Response(
+                response=cached_bytes,
+                status=200,
+                mimetype=mimetype,
+                headers={
+                    "Cache-Control": "public, max-age=31536000, immutable",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+
         asset_path = os.path.join(upload_dir, filename)
         if not os.path.isfile(asset_path):
             return (
@@ -1633,7 +1804,28 @@ def create_app(test_config=None):
                 404,
             )
 
-        mimetype = "image/webp" if filename.endswith(".webp") else "image/jpeg"
+        file_size = os.path.getsize(asset_path)
+        if file_size <= MAX_CACHED_MEDIA_ASSET_BYTES:
+            with open(asset_path, "rb") as asset_fh:
+                asset_bytes = asset_fh.read()
+            with _media_asset_cache_lock:
+                if (
+                    cache_key not in _media_asset_cache
+                    and len(_media_asset_cache) >= MAX_CACHED_MEDIA_ASSETS
+                ):
+                    oldest_key = next(iter(_media_asset_cache))
+                    _media_asset_cache.pop(oldest_key, None)
+                _media_asset_cache[cache_key] = asset_bytes
+            return Response(
+                response=asset_bytes,
+                status=200,
+                mimetype=mimetype,
+                headers={
+                    "Cache-Control": "public, max-age=31536000, immutable",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+
         response = send_from_directory(upload_dir, filename, mimetype=mimetype)
         response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
         response.headers["X-Content-Type-Options"] = "nosniff"
@@ -1999,6 +2191,74 @@ def create_app(test_config=None):
             )
         clear_forms_cache()
         return jsonify({"deleted": True, "id": form_id}), 200
+
+    if flask_app.config.get("SERVE_FRONTEND_DIST"):
+        dist_root = os.path.abspath(flask_app.config["FRONTEND_DIST_DIR"])
+
+        def _serve_spa_index():
+            index_path = os.path.join(dist_root, "index.html")
+            try:
+                mtime_ns = os.stat(index_path).st_mtime_ns
+            except OSError:
+                abort(404)
+
+            with _spa_index_cache_lock:
+                cached = _spa_index_cache.get(index_path)
+                if cached is not None and cached[0] == mtime_ns:
+                    html_bytes = cached[1]
+                else:
+                    html_bytes = None
+
+            if html_bytes is None:
+                if not os.path.isfile(index_path):
+                    abort(404)
+                with open(index_path, "rb") as fh:
+                    html_bytes = fh.read()
+                with _spa_index_cache_lock:
+                    _spa_index_cache[index_path] = (mtime_ns, html_bytes)
+
+            return Response(
+                response=html_bytes,
+                status=200,
+                mimetype="text/html",
+                headers={"Cache-Control": "no-cache"},
+            )
+
+        @flask_app.route("/", methods=["GET"])
+        def serve_frontend_root():
+            return _serve_spa_index()
+
+        @flask_app.route("/<path:subpath>", methods=["GET"])
+        def serve_frontend_path(subpath: str):
+            if subpath == "api" or subpath.startswith("api/"):
+                abort(404)
+            segments = [seg for seg in subpath.split("/") if seg]
+            if any(seg in (".", "..") for seg in segments):
+                abort(404)
+
+            _, ext = os.path.splitext(subpath)
+            if ext.lower() in RAW_AV_EXTENSIONS:
+                abort(404)
+
+            candidate = os.path.abspath(os.path.join(dist_root, subpath))
+            if (
+                candidate != dist_root
+                and candidate.startswith(dist_root + os.sep)
+                and os.path.isfile(candidate)
+            ):
+                resp = send_from_directory(dist_root, subpath)
+                if subpath.startswith("assets/"):
+                    resp.headers["Cache-Control"] = (
+                        "public, max-age=31536000, immutable"
+                    )
+                else:
+                    resp.headers["Cache-Control"] = "public, max-age=86400"
+                return resp
+
+            if ext:
+                abort(404)
+
+            return _serve_spa_index()
 
     return flask_app
 

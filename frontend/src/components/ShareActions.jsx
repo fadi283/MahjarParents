@@ -15,6 +15,7 @@ export default function ShareActions({
   entityType = 'post',
   baseUrl,
   className = '',
+  menuAlign = 'start',
   initialMenuOpen = false,
   onShare,
 }) {
@@ -151,7 +152,9 @@ export default function ShareActions({
 
         {menuOpen && (
           <div
-            className="share-actions__menu"
+            className={`share-actions__menu ${
+              menuAlign === 'end' ? 'share-actions__menu--align-end' : ''
+            }`.trim()}
             role="menu"
             aria-label={`وسائل مشاركة "${payload.title}"`}
           >

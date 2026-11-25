@@ -128,7 +128,12 @@ export default function AnnouncementCard({ post, onSelectPost, shareBaseUrl }) {
           )}
 
           <div className="announcement-card__actions">
-            <ShareActions item={post} entityType="post" baseUrl={shareBaseUrl} />
+            <ShareActions
+              item={post}
+              entityType="post"
+              baseUrl={shareBaseUrl}
+              menuAlign="end"
+            />
 
             {hasDetailAction && (
               <button

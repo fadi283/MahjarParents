@@ -311,8 +311,16 @@ export default function CommitteeAdminPanel({
                     </div>
                     {summary && <p className="admin-item__desc">{summary}</p>}
                     <div className="admin-item__meta">
-                      {member.email && <span>البريد: {member.email}</span>}
-                      {member.phone && <span>الهاتف: {member.phone}</span>}
+                      {member.email && (
+                        <span>
+                          البريد: <bdi dir="ltr">{member.email}</bdi>
+                        </span>
+                      )}
+                      {member.phone && (
+                        <span>
+                          الهاتف: <bdi dir="ltr">{member.phone}</bdi>
+                        </span>
+                      )}
                     </div>
                   </div>
                   <ItemRowActions

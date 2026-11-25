@@ -165,6 +165,7 @@ export default function EngagementSection({
                 <article
                   key={form.id}
                   id={`form-${String(form.id).trim()}`}
+                  dir="rtl"
                   role="listitem"
                   className={`engagement-card ${
                     isSelected ? 'engagement-card--active' : ''
@@ -176,7 +177,9 @@ export default function EngagementSection({
                     >
                       {meta.badge}
                     </span>
-                    <span className="engagement-card__provider">Google Forms</span>
+                    <span className="engagement-card__provider">
+                      <bdi dir="ltr">Google Forms</bdi>
+                    </span>
                   </div>
 
                   <h3 className="engagement-card__title">{form.title}</h3>

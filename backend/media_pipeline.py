@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 
 MAX_IMAGE_UPLOAD_BYTES = 5 * 1024 * 1024
+DEFAULT_MAX_MEDIA_STORAGE_BYTES = 50 * 1024 * 1024
 MAX_IMAGE_WIDTH = 1280
 MAX_IMAGE_HEIGHT = 1280
 MAX_IMAGE_PIXELS = 25_000_000
@@ -393,8 +394,44 @@ def optimize_image(
     }
 
 
-def save_optimized_image(result: dict[str, Any], storage_dir: str | Path) -> Path:
-    """Persist an optimized image asset atomically under storage_dir."""
+def inspect_media_storage(storage_dir: str | Path) -> dict[str, Any]:
+    """Inspect OpenCV-processed image asset usage and verify no raw A/V files are stored."""
+    base_dir = Path(storage_dir)
+    if not base_dir.is_dir():
+        return {
+            "assetCount": 0,
+            "usedBytes": 0,
+            "disallowedFiles": 0,
+        }
+
+    asset_count = 0
+    used_bytes = 0
+    disallowed_files = 0
+    for entry in base_dir.iterdir():
+        if not entry.is_file() or entry.name.startswith(".tmp_"):
+            continue
+        ext = entry.suffix.lower()
+        if ext in RAW_AV_EXTENSIONS:
+            disallowed_files += 1
+            continue
+        if SAFE_ASSET_FILENAME_RE.match(entry.name):
+            asset_count += 1
+            used_bytes += entry.stat().st_size
+
+    return {
+        "assetCount": asset_count,
+        "usedBytes": used_bytes,
+        "disallowedFiles": disallowed_files,
+    }
+
+
+def save_optimized_image(
+    result: dict[str, Any],
+    storage_dir: str | Path,
+    *,
+    max_storage_bytes: int | None = None,
+) -> Path:
+    """Persist an optimized image asset atomically under storage_dir within optional quota."""
     filename = result.get("filename", "")
     if not SAFE_ASSET_FILENAME_RE.match(filename):
         raise MediaValidationError(
@@ -412,6 +449,23 @@ def save_optimized_image(result: dict[str, Any], storage_dir: str | Path) -> Pat
             status_code=400,
             code="INVALID_FILENAME",
         )
+
+    if max_storage_bytes is not None and max_storage_bytes > 0:
+        existing_bytes = 0
+        for entry in base_dir.iterdir():
+            if (
+                entry.is_file()
+                and not entry.name.startswith(".tmp_")
+                and entry.name != filename
+                and SAFE_ASSET_FILENAME_RE.match(entry.name)
+            ):
+                existing_bytes += entry.stat().st_size
+        if existing_bytes + len(result["data"]) > int(max_storage_bytes):
+            raise MediaValidationError(
+                "Media storage quota exceeded for free-tier hosting.",
+                status_code=507,
+                code="STORAGE_QUOTA_EXCEEDED",
+            )
 
     fd, tmp_name = tempfile.mkstemp(
         dir=base_dir,

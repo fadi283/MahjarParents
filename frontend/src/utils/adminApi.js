@@ -1,3 +1,5 @@
+import { buildApiUrl, resolveApiBaseUrl } from './apiConfig.js';
+
 export const ADMIN_TOKEN_STORAGE_KEY = 'mahjar_admin_token';
 
 const ERROR_MESSAGES_AR = {
@@ -65,7 +67,7 @@ function getDefaultStorage() {
 export function createAdminApiClient({
   fetchImpl = typeof fetch === 'function' ? fetch.bind(globalThis) : null,
   storage = getDefaultStorage(),
-  baseUrl = '',
+  baseUrl = resolveApiBaseUrl(),
 } = {}) {
   const readToken = () => {
     if (!storage) return '';
@@ -114,7 +116,7 @@ export function createAdminApiClient({
 
     let response;
     try {
-      response = await fetchImpl(`${baseUrl}${path}`, {
+      response = await fetchImpl(buildApiUrl(path, baseUrl), {
         method,
         headers,
         body: requestBody,
