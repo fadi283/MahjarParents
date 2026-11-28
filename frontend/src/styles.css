@@ -631,8 +631,28 @@ textarea:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 1.1rem;
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
   min-width: 0;
   overflow-wrap: break-word;
+}
+
+.post-detail__status,
+.post-detail__not-found {
+  width: 100%;
+  max-width: 680px;
+  margin: 0 auto;
+  background-color: var(--color-surface);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-card);
+  padding: 2rem 1.25rem;
+  text-align: center;
+  color: var(--color-text-muted);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
 }
 
 .post-detail__toolbar {
@@ -791,6 +811,7 @@ textarea:focus-visible {
 }
 
 .media-embed__frame-wrapper {
+  position: relative;
   width: 100%;
   background-color: #0f172a;
 }
@@ -820,6 +841,8 @@ textarea:focus-visible {
 
 .media-embed__frame-wrapper--post {
   background-color: #ffffff;
+  height: 580px;
+  height: clamp(500px, 72vh, 640px);
   min-height: 480px;
   max-width: 540px;
   margin: 0 auto;
@@ -844,18 +867,24 @@ textarea:focus-visible {
 
 .media-embed__frame-wrapper--telegram {
   background-color: #ffffff;
+  height: 460px;
   min-height: 420px;
   max-width: 540px;
   margin: 0 auto;
 }
 
 .media-embed__frame-wrapper--canva {
+  height: auto;
+  max-width: 100%;
   aspect-ratio: 16 / 9;
   min-height: 360px;
   background-color: #ffffff;
 }
 
 .media-embed__iframe {
+  position: absolute;
+  top: 0;
+  left: 0;
   width: 100%;
   height: 100%;
   border: 0;

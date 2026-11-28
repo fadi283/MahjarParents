@@ -5,6 +5,7 @@ export const DEFAULT_SHARE_TITLE =
   'إعلان من لجنة أولياء أمور مدرسة المحجر الابتدائية';
 export const DEFAULT_FORM_SHARE_TITLE =
   'نموذج تفاعل – لجنة أولياء أمور مدرسة المحجر الابتدائية';
+export const POST_PATH_PREFIX = '/posts/';
 export const POST_HASH_PREFIX = 'post-';
 export const FORM_HASH_PREFIX = 'form-';
 
@@ -108,6 +109,8 @@ function normalizeBaseUrl(rawBase) {
   let pathname = parsed.pathname || '/';
   if (pathname === '/admin' || pathname === '/admin/') {
     pathname = '/';
+  } else {
+    pathname = pathname.replace(/\/posts(?:\/[^/?#]*)?\/?$/, '/') || '/';
   }
   if (!pathname.startsWith('/')) {
     pathname = `/${pathname}`;
@@ -158,11 +161,15 @@ export function buildPostDeepLink(post, { baseUrl, location } = {}) {
       ? normalizeEntityId(post.id)
       : null;
 
-  const hash = postId
-    ? `#${POST_HASH_PREFIX}${encodeURIComponent(postId)}`
-    : '#announcements-feed';
+  if (!postId) {
+    return `${normalizedBase}#announcements-feed`;
+  }
 
-  return `${normalizedBase}${hash}`;
+  const baseWithoutTrailingSlash = normalizedBase.endsWith('/')
+    ? normalizedBase.slice(0, -1)
+    : normalizedBase;
+
+  return `${baseWithoutTrailingSlash}${POST_PATH_PREFIX}${encodeURIComponent(postId)}`;
 }
 
 /**
@@ -196,9 +203,10 @@ export function buildEntityDeepLink(
   return buildPostDeepLink(entity, { baseUrl, location });
 }
 
-function parseEntityIdFromLocation(locationOrHash, hashPrefix, queryKey) {
+function extractLocationParts(locationOrHash) {
   if (!locationOrHash) return null;
 
+  let pathname = '';
   let hash = '';
   let search = '';
 
@@ -210,9 +218,19 @@ function parseEntityIdFromLocation(locationOrHash, hashPrefix, queryKey) {
       hash = trimmed;
     } else if (trimmed.startsWith('?')) {
       search = trimmed;
+    } else if (trimmed.startsWith('/')) {
+      try {
+        const parsed = new URL(trimmed, 'https://localhost');
+        pathname = parsed.pathname || '';
+        hash = parsed.hash || '';
+        search = parsed.search || '';
+      } catch {
+        pathname = trimmed;
+      }
     } else {
       try {
         const parsed = new URL(trimmed);
+        pathname = parsed.pathname || '';
         hash = parsed.hash || '';
         search = parsed.search || '';
       } catch {
@@ -223,6 +241,8 @@ function parseEntityIdFromLocation(locationOrHash, hashPrefix, queryKey) {
       }
     }
   } else if (typeof locationOrHash === 'object') {
+    pathname =
+      typeof locationOrHash.pathname === 'string' ? locationOrHash.pathname : '';
     hash = typeof locationOrHash.hash === 'string' ? locationOrHash.hash : '';
     search =
       typeof locationOrHash.search === 'string' ? locationOrHash.search : '';
@@ -230,6 +250,14 @@ function parseEntityIdFromLocation(locationOrHash, hashPrefix, queryKey) {
     return null;
   }
 
+  return { pathname, hash, search };
+}
+
+function parseEntityIdFromLocation(locationOrHash, hashPrefix, queryKey) {
+  const parts = extractLocationParts(locationOrHash);
+  if (!parts) return null;
+
+  const { hash, search } = parts;
   const prefix = `#${hashPrefix}`;
   if (hash.startsWith(prefix)) {
     const rawId = hash.slice(prefix.length);
@@ -258,9 +286,24 @@ function parseEntityIdFromLocation(locationOrHash, hashPrefix, queryKey) {
 }
 
 /**
- * Extract a post ID from a browser Location object, URL string, or hash string.
+ * Extract a post ID from a /posts/<id> pathname, URL string, legacy hash, or query string.
  */
 export function parsePostIdFromLocation(locationOrHash) {
+  const parts = extractLocationParts(locationOrHash);
+  if (!parts) return null;
+
+  if (parts.pathname) {
+    const pathMatch = parts.pathname.match(/(?:^|\/)posts\/([^/?#]+)\/?$/);
+    if (pathMatch) {
+      try {
+        const decoded = decodeURIComponent(pathMatch[1]).trim();
+        return decoded || null;
+      } catch {
+        return null;
+      }
+    }
+  }
+
   return parseEntityIdFromLocation(locationOrHash, POST_HASH_PREFIX, 'post');
 }
 

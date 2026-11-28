@@ -1,5 +1,6 @@
 import React from 'react';
 import AnnouncementCard, { CATEGORY_LABELS } from './AnnouncementCard.jsx';
+import PostDetailView from './PostDetailView.jsx';
 
 export const POST_CATEGORIES = [
   { id: 'all', label: 'الكل' },
@@ -61,8 +62,61 @@ export function sortAndFilterPosts(posts = [], selectedCategory = 'all') {
 export default function AnnouncementsFeed({
   posts = [],
   shareBaseUrl,
+  activePostId = null,
+  onClosePost,
+  isLoadingPost = false,
 }) {
   const visiblePosts = sortAndFilterPosts(posts, 'all');
+  const normalizedActivePostId =
+    activePostId !== null &&
+    activePostId !== undefined &&
+    String(activePostId).trim() !== ''
+      ? String(activePostId).trim()
+      : null;
+
+  if (normalizedActivePostId) {
+    const matchedPost =
+      visiblePosts.find((p) => String(p?.id) === normalizedActivePostId) ?? null;
+
+    return (
+      <section
+        id="announcements-feed"
+        dir="rtl"
+        className="announcements-feed"
+        aria-labelledby="announcements-feed-heading"
+      >
+        <h2 id="announcements-feed-heading" className="sr-only">
+          تفاصيل الإعلان
+        </h2>
+
+        {matchedPost ? (
+          <PostDetailView
+            post={matchedPost}
+            onClose={onClosePost}
+            shareBaseUrl={shareBaseUrl}
+          />
+        ) : isLoadingPost ? (
+          <div className="post-detail__status" role="status">
+            <p>جاري تحميل الإعلان...</p>
+          </div>
+        ) : (
+          <div className="post-detail__not-found" role="status">
+            <p>الإعلان المطلوب غير موجود أو تم حذفه.</p>
+            {typeof onClosePost === 'function' && (
+              <button
+                type="button"
+                className="post-detail__back-btn"
+                style={{ minHeight: '44px', minWidth: '44px' }}
+                onClick={onClosePost}
+              >
+                العودة إلى قائمة الإعلانات
+              </button>
+            )}
+          </div>
+        )}
+      </section>
+    );
+  }
 
   return (
     <section

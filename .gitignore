@@ -32,3 +32,7 @@ backend/uploads/
 .idea/
 .DS_Store
 .neon
+
+# Private Antigravity rules, planning & workspace skills (not shared in git)
+AGENTS.md
+.agents/

@@ -61,6 +61,7 @@ from media_pipeline import (
     optimize_image,
     sanitize_external_media_links,
     save_optimized_image,
+    transcode_image_bytes_to_jpeg,
     validate_external_media_url,
 )
 from platform_security import (
@@ -75,6 +76,7 @@ from platform_security import (
     parse_int,
     sanitize_error_value,
 )
+from post_preview import build_post_preview_html
 
 COMMITTEE_CACHE_TTL_SECONDS = 300
 POSTS_CACHE_TTL_SECONDS = 300
@@ -1746,6 +1748,53 @@ def create_app(test_config=None):
             },
         )
 
+    @flask_app.route("/api/posts/<int:post_id>", methods=["GET"])
+    def get_single_post(post_id: int):
+        ordered_posts, generation = _get_cached_ordered_posts_with_generation()
+        cache_key = ("single", post_id)
+
+        with _posts_cache_lock:
+            cached_entry = (
+                _posts_cache["responses"].get(cache_key)
+                if _posts_cache["generation"] == generation
+                else None
+            )
+
+        if cached_entry is None:
+            matched_post = next(
+                (
+                    post
+                    for post in ordered_posts
+                    if str(post.get("id")) == str(post_id)
+                ),
+                None,
+            )
+            if matched_post is None:
+                return (
+                    jsonify({
+                        "error": f"Post {post_id} not found.",
+                        "code": "NOT_FOUND",
+                    }),
+                    404,
+                )
+
+            payload_bytes, etag = _serialize_json_and_etag(matched_post)
+            with _posts_cache_lock:
+                if _posts_cache["generation"] == generation:
+                    _cache_bounded_response(
+                        _posts_cache["responses"],
+                        cache_key,
+                        (payload_bytes, etag),
+                    )
+        else:
+            payload_bytes, etag = cached_entry
+
+        return _build_cached_json_response(
+            payload_bytes,
+            etag,
+            POSTS_CACHE_TTL_SECONDS,
+        )
+
     @flask_app.route("/api/forms", methods=["GET"])
     def get_public_forms():
         raw_type = (
@@ -1921,14 +1970,32 @@ def create_app(test_config=None):
                 400,
             )
 
+        requested_format = (request.args.get("format") or "").strip().lower()
+        if requested_format and requested_format not in ("jpeg", "jpg"):
+            return (
+                jsonify({
+                    "error": "Unsupported image format requested. Allowed: jpeg.",
+                    "code": "INVALID_IMAGE_FORMAT",
+                }),
+                400,
+            )
+
+        want_jpeg = requested_format in ("jpeg", "jpg") and filename.endswith(".webp")
         store = _get_store()
         is_db_media_store = hasattr(store, "get_media_asset")
         upload_dir = os.path.abspath(flask_app.config["MEDIA_UPLOAD_DIR"])
-        cache_key = (
-            f"db:{id(store)}" if is_db_media_store else upload_dir,
-            filename,
+        scope_key = f"db:{id(store)}" if is_db_media_store else upload_dir
+        raw_cache_key = (scope_key, filename)
+        cache_key = (scope_key, filename, "jpeg") if want_jpeg else raw_cache_key
+        mimetype = (
+            "image/jpeg"
+            if want_jpeg or filename.endswith(".jpg")
+            else "image/webp"
         )
-        mimetype = "image/webp" if filename.endswith(".webp") else "image/jpeg"
+        cache_headers = {
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "X-Content-Type-Options": "nosniff",
+        }
 
         with _media_asset_cache_lock:
             cached_bytes = _media_asset_cache.get(cache_key)
@@ -1938,78 +2005,81 @@ def create_app(test_config=None):
                 response=cached_bytes,
                 status=200,
                 mimetype=mimetype,
-                headers={
-                    "Cache-Control": "public, max-age=31536000, immutable",
-                    "X-Content-Type-Options": "nosniff",
-                },
+                headers=cache_headers,
             )
 
-        if is_db_media_store:
-            asset_record = store.get_media_asset(filename)
-            if asset_record is None:
-                return (
-                    jsonify({
-                        "error": "Optimized image asset not found.",
-                        "code": "ASSET_NOT_FOUND",
-                    }),
-                    404,
-                )
-            asset_bytes, asset_mimetype = asset_record
-            if len(asset_bytes) <= MAX_CACHED_MEDIA_ASSET_BYTES:
-                with _media_asset_cache_lock:
-                    if (
-                        cache_key not in _media_asset_cache
-                        and len(_media_asset_cache) >= MAX_CACHED_MEDIA_ASSETS
-                    ):
-                        oldest_key = next(iter(_media_asset_cache))
-                        _media_asset_cache.pop(oldest_key, None)
-                    _media_asset_cache[cache_key] = asset_bytes
-            return Response(
-                response=asset_bytes,
-                status=200,
-                mimetype=asset_mimetype or mimetype,
-                headers={
-                    "Cache-Control": "public, max-age=31536000, immutable",
-                    "X-Content-Type-Options": "nosniff",
-                },
-            )
-
-        asset_path = os.path.join(upload_dir, filename)
-        if not os.path.isfile(asset_path):
-            return (
-                jsonify({
-                    "error": "Optimized image asset not found.",
-                    "code": "ASSET_NOT_FOUND",
-                }),
-                404,
-            )
-
-        file_size = os.path.getsize(asset_path)
-        if file_size <= MAX_CACHED_MEDIA_ASSET_BYTES:
-            with open(asset_path, "rb") as asset_fh:
-                asset_bytes = asset_fh.read()
+        def _store_in_media_cache(key, payload: bytes) -> None:
+            if len(payload) > MAX_CACHED_MEDIA_ASSET_BYTES:
+                return
             with _media_asset_cache_lock:
                 if (
-                    cache_key not in _media_asset_cache
+                    key not in _media_asset_cache
                     and len(_media_asset_cache) >= MAX_CACHED_MEDIA_ASSETS
                 ):
                     oldest_key = next(iter(_media_asset_cache))
                     _media_asset_cache.pop(oldest_key, None)
-                _media_asset_cache[cache_key] = asset_bytes
+                _media_asset_cache[key] = payload
+
+        asset_bytes = None
+        asset_mimetype = mimetype
+        if want_jpeg:
+            with _media_asset_cache_lock:
+                asset_bytes = _media_asset_cache.get(raw_cache_key)
+
+        if asset_bytes is None:
+            if is_db_media_store:
+                asset_record = store.get_media_asset(filename)
+                if asset_record is None:
+                    return (
+                        jsonify({
+                            "error": "Optimized image asset not found.",
+                            "code": "ASSET_NOT_FOUND",
+                        }),
+                        404,
+                    )
+                asset_bytes, stored_mime = asset_record
+                if not want_jpeg and stored_mime:
+                    asset_mimetype = stored_mime
+                _store_in_media_cache(raw_cache_key, asset_bytes)
+            else:
+                asset_path = os.path.join(upload_dir, filename)
+                if not os.path.isfile(asset_path):
+                    return (
+                        jsonify({
+                            "error": "Optimized image asset not found.",
+                            "code": "ASSET_NOT_FOUND",
+                        }),
+                        404,
+                    )
+                file_size = os.path.getsize(asset_path)
+                if not want_jpeg and file_size > MAX_CACHED_MEDIA_ASSET_BYTES:
+                    response = send_from_directory(upload_dir, filename, mimetype=mimetype)
+                    response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+                    response.headers["X-Content-Type-Options"] = "nosniff"
+                    return response
+                with open(asset_path, "rb") as asset_fh:
+                    asset_bytes = asset_fh.read()
+                _store_in_media_cache(raw_cache_key, asset_bytes)
+
+        if want_jpeg:
+            try:
+                jpeg_bytes = transcode_image_bytes_to_jpeg(asset_bytes)
+            except MediaValidationError as exc:
+                return jsonify({"error": str(exc), "code": exc.code}), exc.status_code
+            _store_in_media_cache(cache_key, jpeg_bytes)
             return Response(
-                response=asset_bytes,
+                response=jpeg_bytes,
                 status=200,
-                mimetype=mimetype,
-                headers={
-                    "Cache-Control": "public, max-age=31536000, immutable",
-                    "X-Content-Type-Options": "nosniff",
-                },
+                mimetype="image/jpeg",
+                headers=cache_headers,
             )
 
-        response = send_from_directory(upload_dir, filename, mimetype=mimetype)
-        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        return response
+        return Response(
+            response=asset_bytes,
+            status=200,
+            mimetype=asset_mimetype or mimetype,
+            headers=cache_headers,
+        )
 
     @flask_app.route("/api/media/external", methods=["POST"])
     def validate_external_media():
@@ -2434,7 +2504,7 @@ def create_app(test_config=None):
     if flask_app.config.get("SERVE_FRONTEND_DIST"):
         dist_root = os.path.abspath(flask_app.config["FRONTEND_DIST_DIR"])
 
-        def _serve_spa_index():
+        def _load_spa_index_bytes() -> bytes:
             index_path = os.path.join(dist_root, "index.html")
             try:
                 mtime_ns = os.stat(index_path).st_mtime_ns
@@ -2456,8 +2526,44 @@ def create_app(test_config=None):
                 with _spa_index_cache_lock:
                     _spa_index_cache[index_path] = (mtime_ns, html_bytes)
 
+            return html_bytes
+
+        def _serve_spa_index():
+            html_bytes = _load_spa_index_bytes()
             return Response(
                 response=html_bytes,
+                status=200,
+                mimetype="text/html",
+                headers={"Cache-Control": "no-cache"},
+            )
+
+        def _safe_request_origin() -> str:
+            scheme = "https" if request.is_secure else (request.scheme or "http")
+            if scheme not in ("http", "https"):
+                scheme = "https"
+            safe_host = (request.host or "localhost").strip().replace("\r", "").replace("\n", "")
+            return f"{scheme}://{safe_host}"
+
+        @flask_app.route("/posts/<post_id>", methods=["GET"])
+        @flask_app.route("/posts/<post_id>/", methods=["GET"])
+        def serve_post_preview(post_id: str):
+            cleaned_id = (post_id or "").strip()
+            ordered_posts = _get_cached_ordered_posts()
+            matched_post = next(
+                (p for p in ordered_posts if str(p.get("id")) == cleaned_id),
+                None,
+            )
+            if matched_post is None:
+                return _serve_spa_index()
+
+            html_bytes = _load_spa_index_bytes()
+            rendered_html = build_post_preview_html(
+                html_bytes.decode("utf-8"),
+                matched_post,
+                site_origin=_safe_request_origin(),
+            )
+            return Response(
+                response=rendered_html.encode("utf-8"),
                 status=200,
                 mimetype="text/html",
                 headers={"Cache-Control": "no-cache"},

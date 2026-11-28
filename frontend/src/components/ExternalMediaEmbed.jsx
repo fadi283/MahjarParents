@@ -31,6 +31,8 @@ export default function ExternalMediaEmbed({
   const badgeLabel = `${typeLabel} • ${resolved.providerLabel}`;
   const isVideoLike =
     resolved.mediaType === 'video' || resolved.mediaType === 'reel';
+  const allowFrameScroll =
+    resolved.mediaType === 'post' && resolved.provider !== 'canva';
   const renderMode = resolved.renderMode || (resolved.embedUrl ? 'iframe' : 'card');
 
   const touchTargetStyle = {
@@ -155,7 +157,7 @@ export default function ExternalMediaEmbed({
             src={resolved.embedUrl}
             title={frameTitle}
             loading="lazy"
-            scrolling="no"
+            scrolling={allowFrameScroll ? 'auto' : 'no'}
             referrerPolicy="strict-origin-when-cross-origin"
             sandbox="allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox"
             allow={

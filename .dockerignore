@@ -18,3 +18,7 @@ backend/uploads/
 *.db
 *.db-wal
 *.db-shm
+
+# Private Antigravity rules & workspace skills
+AGENTS.md
+.agents/

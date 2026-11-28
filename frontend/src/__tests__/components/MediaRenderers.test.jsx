@@ -327,6 +327,24 @@ test('PostDetailView and PostMediaGallery render RTL detail view with lazy image
   assert.ok(detailHtml.includes('العودة إلى قائمة الإعلانات'));
   assert.match(detailHtml, /min-height:\s*44px/);
   assert.match(detailHtml, /min-width:\s*44px/);
+
+  const summaryFallbackHtml = renderToStaticMarkup(
+    <PostDetailView
+      post={{
+        id: 502,
+        title: 'بيان هام للأهالي',
+        summary: 'نص الملخص الاحتياطي عند خلو الحقل التفصيلي.',
+        content: '   ',
+        category: 'general',
+        publishedAt: '2026-11-25T10:00:00Z',
+      }}
+      onClose={() => {}}
+    />
+  );
+  assert.ok(
+    summaryFallbackHtml.includes('نص الملخص الاحتياطي عند خلو الحقل التفصيلي.'),
+    'PostDetailView must fall back to summary when content is empty or whitespace'
+  );
 });
 
 test('AnnouncementsFeed renders posts stacked vertically with full content and lazy-loaded embeds inline (no detail toggle)', () => {
@@ -578,6 +596,69 @@ test('resolveExternalMediaEmbed and ExternalMediaEmbed support social reels, pos
   assert.equal(resolveExternalMediaEmbed('https://127.0.0.1/a.jpg'), null);
   assert.equal(resolveExternalMediaEmbed('https://localhost/a.png', 'image'), null);
   assert.equal(resolveExternalMediaEmbed('https://cdn.example.org/a.svg', 'image'), null);
+});
+
+test('ExternalMediaEmbed enables auto scrolling for scrollable social posts and keeps scrolling="no" for video/reel/audio/canva', () => {
+  const autoScrollCases = [
+    'https://www.facebook.com/mahjar.school/posts/pfbid02XYZ123',
+    'https://t.me/mahjar_parents/42',
+  ];
+  for (const url of autoScrollCases) {
+    const html = renderToStaticMarkup(<ExternalMediaEmbed media={url} />);
+    assert.match(
+      html,
+      /<iframe[^>]+scrolling="auto"/,
+      `Social post embed (${url}) must allow scrolling="auto"`
+    );
+  }
+
+  const noScrollCases = [
+    'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    'https://vimeo.com/123456789',
+    'https://www.facebook.com/reel/123456789012345',
+    'https://soundcloud.com/school/morning-announcement',
+    'https://drive.google.com/file/d/1AbCdEfGhIjKlMnOpQr/view',
+    'https://www.canva.com/design/DAGAbCdEfGh/view',
+  ];
+  for (const url of noScrollCases) {
+    const html = renderToStaticMarkup(<ExternalMediaEmbed media={url} />);
+    assert.match(
+      html,
+      /<iframe[^>]+scrolling="no"/,
+      `Video/reel/audio/Canva embed (${url}) must keep scrolling="no"`
+    );
+  }
+});
+
+test('styles.css sizes embed wrappers explicitly and positions iframes to fill wrappers without 150px collapse', () => {
+  const cssPath = path.resolve(process.cwd(), 'src/styles.css');
+  const css = fs.readFileSync(cssPath, 'utf-8');
+
+  assert.match(
+    css,
+    /\.media-embed__frame-wrapper\s*\{[^}]*position:\s*relative/s,
+    '.media-embed__frame-wrapper must set position: relative for absolute iframe fill'
+  );
+  assert.match(
+    css,
+    /\.media-embed__iframe\s*\{[^}]*position:\s*absolute[^}]*width:\s*100%[^}]*height:\s*100%/s,
+    '.media-embed__iframe must fill its wrapper via position: absolute, width: 100%, height: 100%'
+  );
+  assert.match(
+    css,
+    /\.media-embed__frame-wrapper--post\s*\{[^}]*\bheight:\s*[^;]+;/s,
+    '.media-embed__frame-wrapper--post must define an explicit height, not only min-height'
+  );
+  assert.match(
+    css,
+    /\.media-embed__frame-wrapper--telegram\s*\{[^}]*\bheight:\s*[^;]+;/s,
+    '.media-embed__frame-wrapper--telegram must define an explicit height, not only min-height'
+  );
+  assert.match(
+    css,
+    /\.media-embed__frame-wrapper--canva\s*\{[^}]*\bheight:\s*auto/s,
+    '.media-embed__frame-wrapper--canva must reset height: auto to preserve its 16/9 aspect-ratio'
+  );
 });
 
 test('Frontend source and public assets do not bundle heavy raw video or audio files into the hosting tier', () => {

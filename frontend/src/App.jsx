@@ -8,7 +8,9 @@ import { defaultAnnouncementsPosts } from './data/announcementsPosts.js';
 import { defaultCommitteeMembers } from './data/committeeMembers.js';
 import { defaultEngagementForms } from './data/engagementForms.js';
 import { API_BASE_URL, buildApiUrl } from './utils/apiConfig.js';
+import { applyDocumentMetaForPost } from './utils/documentMeta.js';
 import { enforceDocumentRtl, RTL_ROOT_ATTRIBUTES } from './utils/rtlLayout.js';
+import { parsePostIdFromLocation } from './utils/whatsappShare.js';
 import './styles.css';
 
 const PAGE_IDS = PAGES.map((p) => p.id);
@@ -32,6 +34,15 @@ export function resolvePageFromHash(rawHash) {
   return PAGE_IDS.includes(hash) ? hash : DEFAULT_PAGE;
 }
 
+export function resolvePageFromLocation(loc) {
+  const resolvedLoc =
+    loc ?? (typeof window !== 'undefined' ? window.location : null);
+  if (parsePostIdFromLocation(resolvedLoc)) {
+    return 'announcements';
+  }
+  return resolvePageFromHash(resolvedLoc?.hash ?? '');
+}
+
 function resolveInitialView(explicitView) {
   if (explicitView === 'admin' || explicitView === 'public') {
     return explicitView;
@@ -50,15 +61,31 @@ export default function App({
   forms = defaultEngagementForms,
   initialView,
   initialPage,
+  initialPostId = null,
+  shareBaseUrl,
   adminProps = {},
 }) {
   const [view, setView] = useState(() => resolveInitialView(initialView));
+  const [activePostId, setActivePostId] = useState(() =>
+    initialPostId !== null && initialPostId !== undefined
+      ? String(initialPostId)
+      : typeof window !== 'undefined'
+        ? parsePostIdFromLocation(window.location)
+        : null
+  );
   const [page, setPage] = useState(() =>
-    PAGE_IDS.includes(initialPage) ? initialPage : resolvePageFromHash()
+    PAGE_IDS.includes(initialPage)
+      ? initialPage
+      : initialPostId !== null && initialPostId !== undefined
+        ? 'announcements'
+        : resolvePageFromLocation()
   );
   const [liveMembers, setLiveMembers] = useState(members);
   const [livePosts, setLivePosts] = useState(posts);
   const [liveForms, setLiveForms] = useState(forms);
+  const [postsHydrating, setPostsHydrating] = useState(
+    () => posts === defaultAnnouncementsPosts && typeof fetch === 'function'
+  );
 
   useEffect(() => {
     enforceDocumentRtl();
@@ -81,7 +108,8 @@ export default function App({
 
     const syncFromLocation = () => {
       if (initialView) return;
-      setPage(resolvePageFromHash());
+      setActivePostId(parsePostIdFromLocation(window.location));
+      setPage(resolvePageFromLocation(window.location));
       if (window.location.pathname === '/admin' || window.location.hash === '#admin') {
         setView('admin');
       } else {
@@ -138,14 +166,43 @@ export default function App({
         } else {
           requests.push(Promise.resolve(null));
         }
+        if (usesDefaultPosts && activePostId) {
+          const singleApiPath = `/api/posts/${encodeURIComponent(activePostId)}`;
+          requests.push(
+            (API_BASE_URL
+              ? fetch(buildApiUrl(singleApiPath))
+              : fetch(singleApiPath)
+            ).then((r) => (r.ok ? r.json() : null))
+          );
+        } else {
+          requests.push(Promise.resolve(null));
+        }
 
-        const [fetchedMembers, fetchedPosts, fetchedForms] = await Promise.all(requests);
+        const [fetchedMembers, fetchedPosts, fetchedForms, fetchedSinglePost] =
+          await Promise.all(requests);
         if (cancelled) return;
         if (Array.isArray(fetchedMembers)) {
           setLiveMembers(fetchedMembers);
         }
         if (Array.isArray(fetchedPosts)) {
-          setLivePosts(fetchedPosts);
+          const mergedPosts =
+            fetchedSinglePost &&
+            typeof fetchedSinglePost === 'object' &&
+            fetchedSinglePost.id !== undefined &&
+            !fetchedPosts.some((p) => String(p?.id) === String(fetchedSinglePost.id))
+              ? [fetchedSinglePost, ...fetchedPosts]
+              : fetchedPosts;
+          setLivePosts(mergedPosts);
+        } else if (
+          fetchedSinglePost &&
+          typeof fetchedSinglePost === 'object' &&
+          fetchedSinglePost.id !== undefined
+        ) {
+          setLivePosts((prev) =>
+            prev.some((p) => String(p?.id) === String(fetchedSinglePost.id))
+              ? prev
+              : [fetchedSinglePost, ...prev]
+          );
         }
         if (Array.isArray(fetchedForms)) {
           setLiveForms(fetchedForms);
@@ -154,6 +211,10 @@ export default function App({
         }
       } catch {
         // Keep bundled fallback data when backend API is unavailable
+      } finally {
+        if (!cancelled) {
+          setPostsHydrating(false);
+        }
       }
     }
 
@@ -161,31 +222,63 @@ export default function App({
     return () => {
       cancelled = true;
     };
-  }, [members, posts, forms]);
+  }, [members, posts, forms, activePostId]);
 
   const navigateTo = (nextView) => {
     setView(nextView);
+    if (nextView === 'admin') {
+      setActivePostId(null);
+    }
     if (typeof window !== 'undefined' && !initialView) {
       if (nextView === 'admin') {
-        if (window.location.hash !== '#admin') {
-          window.history.pushState(null, '', '#admin');
+        if (window.location.hash !== '#admin' || window.location.pathname !== '/') {
+          window.history.pushState(null, '', '/#admin');
         }
-      } else if (window.location.hash === '#admin' || window.location.pathname === '/admin') {
-        window.history.pushState(null, '', `${window.location.pathname === '/admin' ? '/' : window.location.pathname}#${page}`);
+      } else if (
+        window.location.hash === '#admin' ||
+        window.location.pathname === '/admin' ||
+        parsePostIdFromLocation(window.location)
+      ) {
+        window.history.pushState(null, '', `/#${page}`);
       }
     }
   };
 
   const navigatePage = (nextPage) => {
     setView('public');
+    setActivePostId(null);
     setPage(nextPage);
     if (typeof window !== 'undefined') {
-      if (!initialView && window.location.hash !== `#${nextPage}`) {
-        window.history.pushState(null, '', `#${nextPage}`);
+      if (
+        !initialView &&
+        (window.location.pathname !== '/' || window.location.hash !== `#${nextPage}`)
+      ) {
+        window.history.pushState(null, '', `/#${nextPage}`);
       }
       window.scrollTo?.({ top: 0 });
     }
   };
+
+  const handleClosePost = useCallback(() => {
+    setView('public');
+    setActivePostId(null);
+    setPage('announcements');
+    if (typeof window !== 'undefined') {
+      if (!initialView) {
+        window.history.pushState(null, '', '/#announcements');
+      }
+      window.scrollTo?.({ top: 0 });
+    }
+  }, [initialView]);
+
+  const activePost =
+    view === 'public' && page === 'announcements' && activePostId
+      ? livePosts.find((p) => String(p?.id) === String(activePostId)) ?? null
+      : null;
+
+  useEffect(() => {
+    applyDocumentMetaForPost(activePost, { baseUrl: shareBaseUrl });
+  }, [activePost, shareBaseUrl]);
 
   const handleAdminDataChanged = useCallback((nextData) => {
     if (Array.isArray(nextData?.committee)) {
@@ -241,7 +334,15 @@ export default function App({
           />
         ) : (
           <>
-            {page === 'announcements' && <AnnouncementsFeed posts={livePosts} />}
+            {page === 'announcements' && (
+              <AnnouncementsFeed
+                posts={livePosts}
+                shareBaseUrl={shareBaseUrl}
+                activePostId={activePostId}
+                onClosePost={handleClosePost}
+                isLoadingPost={postsHydrating}
+              />
+            )}
             {page === 'engagement' && <EngagementSection forms={liveForms} members={liveMembers} />}
             {page === 'committee' && <CommitteeDirectory members={liveMembers} />}
           </>

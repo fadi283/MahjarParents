@@ -7,14 +7,10 @@ export default function PostDetailView({ post, onClose, shareBaseUrl }) {
   if (!post) return null;
 
   const title = (post.title ?? '').trim();
-  const body = (
-    post.content ??
-    post.body ??
-    post.details ??
-    post.summary ??
-    post.description ??
-    ''
-  ).trim();
+  const body =
+    [post.content, post.body, post.details, post.summary, post.description]
+      .find((value) => typeof value === 'string' && value.trim().length > 0)
+      ?.trim() ?? '';
   const category = (post.category ?? 'general').trim();
   const categoryLabel = CATEGORY_LABELS[category] ?? CATEGORY_LABELS.general;
   const publishedAt =
@@ -29,8 +25,16 @@ export default function PostDetailView({ post, onClose, shareBaseUrl }) {
     minWidth: '44px',
   };
 
+  const postDomId =
+    post.id !== null &&
+    post.id !== undefined &&
+    String(post.id).trim() !== ''
+      ? `post-${String(post.id).trim()}`
+      : undefined;
+
   return (
     <article
+      id={postDomId}
       dir="rtl"
       className={`post-detail post-detail--${category}`}
       aria-labelledby="post-detail-title"

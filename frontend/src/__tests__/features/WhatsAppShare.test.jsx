@@ -58,10 +58,10 @@ function decodeWhatsAppText(whatsappUrl) {
 }
 
 // 1. buildPostDeepLink
-test('buildPostDeepLink constructs canonical deep links, normalizes paths, and rejects unsafe explicit URLs', () => {
+test('buildPostDeepLink constructs canonical /posts/<id> deep links, normalizes paths, strips existing post paths, and rejects unsafe explicit URLs', () => {
   assert.equal(
     buildPostDeepLink({ id: 102 }, { baseUrl: 'https://mahjar.example.org' }),
-    'https://mahjar.example.org/#post-102'
+    'https://mahjar.example.org/posts/102'
   );
 
   assert.equal(
@@ -69,7 +69,7 @@ test('buildPostDeepLink constructs canonical deep links, normalizes paths, and r
       { id: 102 },
       { baseUrl: 'https://mahjar.example.org/school/?a=1#old' }
     ),
-    'https://mahjar.example.org/school/#post-102'
+    'https://mahjar.example.org/school/posts/102'
   );
 
   assert.equal(
@@ -77,7 +77,24 @@ test('buildPostDeepLink constructs canonical deep links, normalizes paths, and r
       { id: 102 },
       { baseUrl: 'https://mahjar.example.org/admin' }
     ),
-    'https://mahjar.example.org/#post-102'
+    'https://mahjar.example.org/posts/102'
+  );
+
+  assert.equal(
+    buildPostDeepLink(
+      { id: 102 },
+      { baseUrl: 'https://mahjar.example.org/posts/99' }
+    ),
+    'https://mahjar.example.org/posts/102',
+    'Must strip existing /posts/<otherId> from baseUrl when constructing a post share link'
+  );
+
+  assert.equal(
+    buildPostDeepLink(
+      { id: 102 },
+      { baseUrl: 'https://mahjar.example.org/school/posts/99/' }
+    ),
+    'https://mahjar.example.org/school/posts/102'
   );
 
   assert.equal(
@@ -119,7 +136,7 @@ test('buildPostDeepLink constructs canonical deep links, normalizes paths, and r
         { id: 102, directUrl: unsafeUrl },
         { baseUrl: 'https://mahjar.example.org' }
       ),
-      'https://mahjar.example.org/#post-102',
+      'https://mahjar.example.org/posts/102',
       `Must reject unsafe explicit URL: ${unsafeUrl}`
     );
   }
@@ -131,8 +148,8 @@ test('buildPostDeepLink constructs canonical deep links, normalizes paths, and r
 
   assert.equal(
     buildPostDeepLink({ id: 102 }),
-    '/#post-102',
-    'Should fall back to root-relative #post-<id> when neither baseUrl nor window.location exists'
+    '/posts/102',
+    'Should fall back to root-relative /posts/<id> when neither baseUrl nor window.location exists'
   );
 
   assert.equal(
@@ -140,12 +157,34 @@ test('buildPostDeepLink constructs canonical deep links, normalizes paths, and r
       { id: 'event 2026/1&a=b' },
       { baseUrl: 'https://mahjar.example.org' }
     ),
-    'https://mahjar.example.org/#post-event%202026%2F1%26a%3Db'
+    'https://mahjar.example.org/posts/event%202026%2F1%26a%3Db'
   );
 });
 
 // 2. parsePostIdFromLocation
-test('parsePostIdFromLocation extracts post IDs from hashes, URLs, and query strings while ignoring unrelated/malformed inputs', () => {
+test('parsePostIdFromLocation extracts post IDs from /posts/<id> paths, legacy hashes, URLs, and query strings while ignoring unrelated/malformed inputs', () => {
+  assert.equal(parsePostIdFromLocation('/posts/102'), '102');
+  assert.equal(
+    parsePostIdFromLocation('https://mahjar.example.org/posts/102'),
+    '102'
+  );
+  assert.equal(
+    parsePostIdFromLocation('https://mahjar.example.org/posts/102/'),
+    '102'
+  );
+  assert.equal(
+    parsePostIdFromLocation('/school/posts/102'),
+    '102'
+  );
+  assert.equal(
+    parsePostIdFromLocation({ pathname: '/posts/42', hash: '', search: '' }),
+    '42'
+  );
+  assert.equal(
+    parsePostIdFromLocation('/posts/event%202026'),
+    'event 2026'
+  );
+  // Legacy #post-<id> and ?post=<id> compatibility
   assert.equal(parsePostIdFromLocation('#post-102'), '102');
   assert.equal(
     parsePostIdFromLocation('https://mahjar.example.org/#post-102'),
@@ -165,12 +204,17 @@ test('parsePostIdFromLocation extracts post IDs from hashes, URLs, and query str
   );
 
   for (const invalid of [
+    '/',
+    '/posts',
+    '/posts/',
+    '/posts/%E0%A4%A',
     '#admin',
     '#engagement-section',
     '',
     null,
     undefined,
     '#post-%E0%A4%A',
+    { pathname: '/', hash: '', search: '' },
     { hash: '', search: '' },
   ]) {
     assert.equal(
@@ -188,10 +232,10 @@ test('buildSharePayload and buildWhatsAppShareUrl encode title and deep link saf
   });
   assert.ok(payload);
   assert.equal(payload.title, 'يوم التراث والهوية في مدرسة المحجر');
-  assert.equal(payload.url, 'https://mahjar.example.org/#post-102');
+  assert.equal(payload.url, 'https://mahjar.example.org/posts/102');
   assert.equal(
     payload.text,
-    'يوم التراث والهوية في مدرسة المحجر\nhttps://mahjar.example.org/#post-102'
+    'يوم التراث والهوية في مدرسة المحجر\nhttps://mahjar.example.org/posts/102'
   );
   assert.ok(payload.whatsappUrl.startsWith(`${WHATSAPP_SHARE_BASE_URL}?text=`));
   assert.equal(decodeWhatsAppText(payload.whatsappUrl), payload.text);
@@ -210,7 +254,7 @@ test('buildSharePayload and buildWhatsAppShareUrl encode title and deep link saf
   });
   assert.equal(
     decodeWhatsAppText(specialWaUrl),
-    'سؤال & جواب #مهم = للأهالي؟\nhttps://mahjar.example.org/#post-205'
+    'سؤال & جواب #مهم = للأهالي؟\nhttps://mahjar.example.org/posts/205'
   );
 
   const xssPost = {
@@ -278,7 +322,7 @@ test('canUseWebShare and sharePost support Web Share API, AbortError handling, a
   assert.deepEqual(shareCalls[0], {
     title: 'يوم التراث والهوية في مدرسة المحجر',
     text: 'يوم التراث والهوية في مدرسة المحجر',
-    url: 'https://mahjar.example.org/#post-102',
+    url: 'https://mahjar.example.org/posts/102',
   });
 
   // AbortError must not open fallback window
@@ -391,7 +435,7 @@ test('WhatsAppShareButton renders accessible RTL WhatsApp share link with inline
   const decodedHref = hrefMatch[1].replace(/&amp;/g, '&');
   const decodedText = decodeWhatsAppText(decodedHref);
   assert.ok(decodedText.includes('يوم التراث والهوية في مدرسة المحجر'));
-  assert.ok(decodedText.includes('https://mahjar.example.org/#post-102'));
+  assert.ok(decodedText.includes('https://mahjar.example.org/posts/102'));
 
   assert.equal(renderToStaticMarkup(<WhatsAppShareButton post={null} />), '');
   assert.equal(
@@ -414,7 +458,7 @@ test('AnnouncementCard renders single Share action across all 4 categories even 
     assert.match(html, /aria-expanded="false"/);
     assert.match(
       html,
-      new RegExp(`data-share-url="https://mahjar\\.example\\.org/#post-${post.id}"`)
+      new RegExp(`data-share-url="https://mahjar\\.example\\.org/posts/${post.id}"`)
     );
     assert.match(html, /data-whatsapp-url="https:\/\/wa\.me\/\?text=[^"]+"/);
     assert.ok(html.includes('مشاركة'));
