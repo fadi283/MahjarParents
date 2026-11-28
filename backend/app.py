@@ -1348,6 +1348,7 @@ def create_app(test_config=None):
     database_url = (
         (test_config.get("DATABASE_URL") if test_config and "DATABASE_URL" in test_config else None)
         or _get_setting("MAHJAR_DATABASE_URL")
+        or ("" if is_testing else _get_setting("DATABASE_URL"))
     ).strip()
 
     default_upload_dir = (
@@ -1559,7 +1560,11 @@ def create_app(test_config=None):
             if hasattr(store, "storage_info")
             else {"backend": "json", "persisted": False, "sizeBytes": 0, "counts": {}}
         )
-        media_stats = inspect_media_storage(flask_app.config["MEDIA_UPLOAD_DIR"])
+        media_stats = (
+            store.inspect_media_storage()
+            if hasattr(store, "inspect_media_storage")
+            else inspect_media_storage(flask_app.config["MEDIA_UPLOAD_DIR"])
+        )
         dist_dir = os.path.abspath(flask_app.config["FRONTEND_DIST_DIR"])
         dist_ready = bool(
             flask_app.config.get("SERVE_FRONTEND_DIST")
@@ -1859,6 +1864,7 @@ def create_app(test_config=None):
         quality_raw = request.form.get("quality") or request.args.get("quality")
         file_bytes = uploaded_file.read()
 
+        store = _get_store()
         try:
             result = optimize_image(
                 file_bytes,
@@ -1870,11 +1876,22 @@ def create_app(test_config=None):
                 quality=quality_raw,
                 max_bytes=int(flask_app.config["MAX_IMAGE_UPLOAD_BYTES"]),
             )
-            save_optimized_image(
-                result,
-                flask_app.config["MEDIA_UPLOAD_DIR"],
-                max_storage_bytes=int(flask_app.config["MAX_MEDIA_STORAGE_BYTES"]),
-            )
+            if hasattr(store, "save_media_asset"):
+                store.save_media_asset(
+                    result["filename"],
+                    result["mimeType"],
+                    result["data"],
+                    max_storage_bytes=int(flask_app.config["MAX_MEDIA_STORAGE_BYTES"]),
+                )
+                cache_key = (f"db:{id(store)}", result["filename"])
+                with _media_asset_cache_lock:
+                    _media_asset_cache.pop(cache_key, None)
+            else:
+                save_optimized_image(
+                    result,
+                    flask_app.config["MEDIA_UPLOAD_DIR"],
+                    max_storage_bytes=int(flask_app.config["MAX_MEDIA_STORAGE_BYTES"]),
+                )
         except MediaValidationError as exc:
             return jsonify({"error": str(exc), "code": exc.code}), exc.status_code
 
@@ -1895,8 +1912,13 @@ def create_app(test_config=None):
                 400,
             )
 
+        store = _get_store()
+        is_db_media_store = hasattr(store, "get_media_asset")
         upload_dir = os.path.abspath(flask_app.config["MEDIA_UPLOAD_DIR"])
-        cache_key = (upload_dir, filename)
+        cache_key = (
+            f"db:{id(store)}" if is_db_media_store else upload_dir,
+            filename,
+        )
         mimetype = "image/webp" if filename.endswith(".webp") else "image/jpeg"
 
         with _media_asset_cache_lock:
@@ -1907,6 +1929,36 @@ def create_app(test_config=None):
                 response=cached_bytes,
                 status=200,
                 mimetype=mimetype,
+                headers={
+                    "Cache-Control": "public, max-age=31536000, immutable",
+                    "X-Content-Type-Options": "nosniff",
+                },
+            )
+
+        if is_db_media_store:
+            asset_record = store.get_media_asset(filename)
+            if asset_record is None:
+                return (
+                    jsonify({
+                        "error": "Optimized image asset not found.",
+                        "code": "ASSET_NOT_FOUND",
+                    }),
+                    404,
+                )
+            asset_bytes, asset_mimetype = asset_record
+            if len(asset_bytes) <= MAX_CACHED_MEDIA_ASSET_BYTES:
+                with _media_asset_cache_lock:
+                    if (
+                        cache_key not in _media_asset_cache
+                        and len(_media_asset_cache) >= MAX_CACHED_MEDIA_ASSETS
+                    ):
+                        oldest_key = next(iter(_media_asset_cache))
+                        _media_asset_cache.pop(oldest_key, None)
+                    _media_asset_cache[cache_key] = asset_bytes
+            return Response(
+                response=asset_bytes,
+                status=200,
+                mimetype=asset_mimetype or mimetype,
                 headers={
                     "Cache-Control": "public, max-age=31536000, immutable",
                     "X-Content-Type-Options": "nosniff",

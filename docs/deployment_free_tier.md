@@ -6,11 +6,14 @@
 
 ## 1. خيارات النشر المجاني (Deployment Topologies)
 
-### الخيار أ: النشر المنفصل (Split PaaS — موصى به للأداء المجاني)
-- **الواجهة الأمامية (React + Vite):** تُنشر كملفات ساكنة على **Vercel** (`vercel.json`) أو **Netlify** (`netlify.toml`) أو **Render Static Site** (`render.yaml`).
+### الخيار أ: النشر المنفصل الدائم (Vercel + Render + Neon PostgreSQL — موصى به مجاناً)
+- **الواجهة الأمامية (React + Vite):** تُنشر كملفات ساكنة على **Vercel** (`vercel.json`) بدومين ثابت مجاني (`https://<project>.vercel.app`) أو **Netlify** (`netlify.toml`).
   - أمر البناء: `cd frontend && npm ci && npm run build && npm run build:verify`
   - متغير البيئة المطلوب: `VITE_API_BASE_URL=https://<your-flask-service>.onrender.com`
-- **الواجهة الخلفية (Flask + OpenCV-headless + Gunicorn):** تُنشر على **Render Free Web Service** (`render.yaml`) أو Railway / Fly.io عبر `Procfile` و `backend/gunicorn.conf.py`.
+- **الواجهة الخلفية (Flask + OpenCV-headless + Gunicorn):** تُنشر على **Render Free Web Service** (`render.yaml`).
+- **قاعدة البيانات والصور الدائمة (Neon PostgreSQL Free — 1 GB):**
+  - بضبط `MAHJAR_DATABASE_URL=postgresql://...` (مع `MAHJAR_STORAGE_BACKEND=auto` أو `postgres`)، تُحفظ جميع بيانات الـ CMS والصور المضغوطة عبر OpenCV (`media_assets`) داخل Neon PostgreSQL بشكل دائم لا يتأثر بإعادة تشغيل أو نشر حاوية Render.
+  - لنقل البيانات والصور المحلية إلى Neon، استخدم أداة الترحيل: `python backend/migrate_to_postgres.py --database-url "<NEON_URL>"`.
 
 ### الخيار ب: حاوية واحدة موحدة (Single-Service Docker)
 - يبني `Dockerfile` واجهة React أولاً داخل `node:22-alpine` ثم يدمج `frontend/dist` مع خادم Flask/Gunicorn داخل `python:3.12-slim` مع تفعيل:

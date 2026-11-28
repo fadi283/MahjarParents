@@ -7,10 +7,14 @@ services:
     startCommand: gunicorn --chdir backend -c backend/gunicorn.conf.py wsgi:app
     healthCheckPath: /api/health
     envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"
       - key: MAHJAR_ENV
         value: production
       - key: MAHJAR_STORAGE_BACKEND
-        value: sqlite
+        value: auto
+      - key: MAHJAR_DATABASE_URL
+        sync: false
       - key: MAHJAR_DATA_DIR
         value: /opt/render/project/src/backend/instance
       - key: MAHJAR_MAX_MEDIA_STORAGE_BYTES
