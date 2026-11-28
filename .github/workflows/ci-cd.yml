@@ -63,7 +63,7 @@ jobs:
             echo "backend=false" >> "$GITHUB_OUTPUT"
           fi
 
-          if printf '%s\n' "$CHANGED_FILES" | grep -qE '^(frontend/|vercel\.json$|netlify\.toml$|\.github/workflows/ci-cd\.yml$)'; then
+          if printf '%s\n' "$CHANGED_FILES" | grep -qE '^(frontend/|api/|vercel\.json$|netlify\.toml$|\.github/workflows/ci-cd\.yml$)'; then
             echo "frontend=true" >> "$GITHUB_OUTPUT"
           else
             echo "frontend=false" >> "$GITHUB_OUTPUT"

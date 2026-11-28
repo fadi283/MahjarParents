@@ -84,6 +84,15 @@ test('buildFormDeepLink constructs #form-<id> deep links ignoring external Googl
 
   assert.equal(
     buildFormDeepLink(
+      { id: 3 },
+      { baseUrl: 'https://mahjar.example.org/posts/102' }
+    ),
+    'https://mahjar.example.org/#form-3',
+    'buildFormDeepLink must strip /posts/<id> from baseUrl'
+  );
+
+  assert.equal(
+    buildFormDeepLink(
       { title: 'نموذج بدون معرف' },
       { baseUrl: 'https://mahjar.example.org' }
     ),
@@ -151,11 +160,11 @@ test('buildSharePayload and buildFormSharePayload build WhatsApp, Facebook, and 
     baseUrl: 'https://mahjar.example.org',
   });
   assert.ok(postPayload);
-  assert.equal(postPayload.url, 'https://mahjar.example.org/#post-102');
+  assert.equal(postPayload.url, 'https://mahjar.example.org/posts/102');
   assert.ok(postPayload.whatsappUrl.startsWith('https://wa.me/?text='));
   assert.equal(
     new URL(postPayload.facebookUrl).searchParams.get('u'),
-    'https://mahjar.example.org/#post-102'
+    'https://mahjar.example.org/posts/102'
   );
   assert.ok(postPayload.emailUrl.startsWith('mailto:?subject='));
   assert.equal('telegramUrl' in postPayload, false);
@@ -221,7 +230,7 @@ test('isMobileDevice, shouldUseNativeMobileShare, and executeShareButtonAction i
   assert.equal(
     shouldUseNativeMobileShare({
       navigatorObj: androidNav,
-      shareData: { title: 't', url: 'https://mahjar.example.org/#post-102' },
+      shareData: { title: 't', url: 'https://mahjar.example.org/posts/102' },
     }),
     true
   );
@@ -229,7 +238,7 @@ test('isMobileDevice, shouldUseNativeMobileShare, and executeShareButtonAction i
     shouldUseNativeMobileShare({
       navigatorObj: desktopNavWithShare,
       windowObj: { matchMedia: () => ({ matches: false }) },
-      shareData: { title: 't', url: 'https://mahjar.example.org/#post-102' },
+      shareData: { title: 't', url: 'https://mahjar.example.org/posts/102' },
     }),
     false
   );
@@ -252,7 +261,7 @@ test('isMobileDevice, shouldUseNativeMobileShare, and executeShareButtonAction i
     {
       title: samplePost.title,
       text: samplePost.title,
-      url: 'https://mahjar.example.org/#post-102',
+      url: 'https://mahjar.example.org/posts/102',
     },
   ]);
 
@@ -393,7 +402,7 @@ test('ShareActions renders a single Share button when closed and opens a menu wi
   assert.match(closedHtml, /aria-expanded="false"/);
   assert.match(
     closedHtml,
-    /data-share-url="https:\/\/mahjar\.example\.org\/#post-102"/
+    /data-share-url="https:\/\/mahjar\.example\.org\/posts\/102"/
   );
   assert.match(closedHtml, /data-whatsapp-url="https:\/\/wa\.me\/\?text=[^"]+"/);
   assert.ok(closedHtml.includes('مشاركة'));
@@ -402,9 +411,9 @@ test('ShareActions renders a single Share button when closed and opens a menu wi
   assert.match(closedHtml, /min-height:\s*44px/);
   assert.match(closedHtml, /min-width:\s*44px/);
 
-  for (const { item, entityType, expectedHash } of [
-    { item: samplePost, entityType: 'post', expectedHash: '#post-102' },
-    { item: sampleForms[1], entityType: 'form', expectedHash: '#form-3' },
+  for (const { item, entityType, expectedNeedle } of [
+    { item: samplePost, entityType: 'post', expectedNeedle: 'posts%2F102' },
+    { item: sampleForms[1], entityType: 'form', expectedNeedle: 'form-3' },
   ]) {
     const openHtml = renderToStaticMarkup(
       <ShareActions
@@ -431,7 +440,7 @@ test('ShareActions renders a single Share button when closed and opens a menu wi
     assert.match(
       openHtml,
       new RegExp(
-        `href="https://www\\.facebook\\.com/sharer/sharer\\.php\\?u=[^"]*${expectedHash.slice(1)}"[^>]*target="_blank"[^>]*rel="noopener noreferrer"`
+        `href="https://www\\.facebook\\.com/sharer/sharer\\.php\\?u=[^"]*${expectedNeedle}"[^>]*target="_blank"[^>]*rel="noopener noreferrer"`
       )
     );
     assert.ok(openHtml.includes('مشاركة عبر فيسبوك'));
@@ -547,7 +556,7 @@ test('EngagementSection and GoogleFormEmbed expose #form-<id> deep links via a s
   );
 
   const appHtml = renderToStaticMarkup(<App />);
-  assert.match(appHtml, /data-whatsapp-url="https:\/\/wa\.me\/\?text=[^"]*post-/);
+  assert.match(appHtml, /data-whatsapp-url="https:\/\/wa\.me\/\?text=[^"]*posts%2F/);
   const engagementAppHtml = renderToStaticMarkup(<App initialPage="engagement" />);
   assert.match(engagementAppHtml, /data-whatsapp-url="https:\/\/wa\.me\/\?text=[^"]*form-/);
 });

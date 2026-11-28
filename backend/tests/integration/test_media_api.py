@@ -225,6 +225,34 @@ class TestFlaskMediaEndpoints:
         missing = client.get("/api/media/images/0123456789abcdef.webp")
         assert missing.status_code == 404
 
+    def test_serve_image_supports_jpeg_transcode_for_social_previews_and_rejects_invalid_format(self, client):
+        png_bytes = _encode_png_with_text_chunk(240, 160)
+        upload = client.post(
+            "/api/media/images",
+            data={"file": (io.BytesIO(png_bytes), "poster.png", "image/png")},
+            content_type="multipart/form-data",
+        )
+        assert upload.status_code == 201
+        asset_url = upload.get_json()["url"]
+        assert asset_url.endswith(".webp")
+
+        jpeg_resp = client.get(f"{asset_url}?format=jpeg")
+        assert jpeg_resp.status_code == 200
+        assert jpeg_resp.mimetype == "image/jpeg"
+        assert jpeg_resp.data.startswith(b"\xff\xd8\xff")
+        assert "immutable" in jpeg_resp.headers.get("Cache-Control", "")
+        assert jpeg_resp.headers.get("Cross-Origin-Resource-Policy") == "cross-origin"
+
+        # Repeated read hits in-memory JPEG transcode cache
+        jpeg_cached = client.get(f"{asset_url}?format=jpg")
+        assert jpeg_cached.status_code == 200
+        assert jpeg_cached.mimetype == "image/jpeg"
+        assert jpeg_cached.data == jpeg_resp.data
+
+        bad_fmt = client.get(f"{asset_url}?format=exe")
+        assert bad_fmt.status_code == 400
+        assert bad_fmt.get_json()["code"] == "INVALID_IMAGE_FORMAT"
+
     def test_external_media_endpoint_validates_and_normalizes_or_rejects(self, client):
         yt_resp = client.post(
             "/api/media/external",

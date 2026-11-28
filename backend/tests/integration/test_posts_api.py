@@ -318,3 +318,48 @@ class TestPostsCachingAndPerformance:
         assert response.status_code == 200
         assert len(response.get_json()) == 10
         assert elapsed_ms < 500.0
+
+
+@pytest.mark.integration
+@pytest.mark.api
+class TestSinglePostEndpoint:
+    """Contract, caching, and 404 tests for GET /api/posts/<int:post_id>."""
+
+    def test_returns_single_normalized_post_with_etag_and_304(self, client):
+        resp = client.get("/api/posts/1")
+        assert resp.status_code == 200
+        assert resp.content_type == "application/json"
+
+        data = resp.get_json()
+        assert REQUIRED_POST_KEYS.issubset(data.keys())
+        assert data["id"] == 1
+        assert "يوم التراث" in data["title"]
+        assert "mediaLinks" in data
+
+        etag = resp.headers.get("ETag")
+        assert etag is not None and etag.startswith('"')
+        assert "public" in resp.headers.get("Cache-Control", "")
+
+        resp_304 = client.get("/api/posts/1", headers={"If-None-Match": etag})
+        assert resp_304.status_code == 304
+        assert resp_304.get_data() == b""
+
+    def test_returns_404_for_missing_post_and_respects_cache_invalidation(
+        self, client, post_factory, mock_posts_source
+    ):
+        mock_posts_source([post_factory(id=10, title="الإعلان الأول")])
+
+        missing = client.get("/api/posts/99999")
+        assert missing.status_code == 404
+        assert missing.get_json()["code"] == "NOT_FOUND"
+
+        found = client.get("/api/posts/10")
+        assert found.status_code == 200
+        assert found.get_json()["title"] == "الإعلان الأول"
+
+        mock_posts_source([post_factory(id=10, title="الإعلان المحدّث")])
+        backend_app.clear_posts_cache()
+
+        refreshed = client.get("/api/posts/10")
+        assert refreshed.status_code == 200
+        assert refreshed.get_json()["title"] == "الإعلان المحدّث"

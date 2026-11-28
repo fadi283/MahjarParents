@@ -460,6 +460,42 @@ def optimize_image(
     }
 
 
+def transcode_image_bytes_to_jpeg(
+    image_bytes: bytes,
+    *,
+    max_width: int = 1200,
+    max_height: int = 1200,
+    quality: int = DEFAULT_JPEG_QUALITY,
+) -> bytes:
+    """Decode stored WebP/image bytes and re-encode as JPEG for legacy social preview scrapers."""
+    if not image_bytes:
+        raise MediaValidationError(
+            "Unable to decode stored image for JPEG preview.",
+            status_code=500,
+            code="IMAGE_TRANSCODE_ERROR",
+        )
+    try:
+        decoded = decode_image_bytes(image_bytes)
+    except MediaValidationError as exc:
+        raise MediaValidationError(
+            "Unable to decode stored image for JPEG preview.",
+            status_code=500,
+            code="IMAGE_TRANSCODE_ERROR",
+        ) from exc
+
+    resized_img, _ = resize_image_if_oversized(
+        decoded,
+        max_width=max_width,
+        max_height=max_height,
+    )
+    jpeg_bytes, _, _ = encode_optimized_image(
+        resized_img,
+        output_format="jpeg",
+        quality=quality,
+    )
+    return jpeg_bytes
+
+
 def inspect_media_storage(storage_dir: str | Path) -> dict[str, Any]:
     """Inspect OpenCV-processed image asset usage and verify no raw A/V files are stored."""
     base_dir = Path(storage_dir)

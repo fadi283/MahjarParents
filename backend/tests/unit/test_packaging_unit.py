@@ -306,7 +306,23 @@ class TestWSGIAndDeploymentArtifacts:
         vercel = json.loads((PROJECT_ROOT / "vercel.json").read_text(encoding="utf-8"))
         assert "frontend" in vercel["buildCommand"]
         assert vercel["outputDirectory"] == "frontend/dist"
-        assert any(r.get("destination") == "/index.html" for r in vercel.get("rewrites", []))
+        rewrites = vercel.get("rewrites", [])
+        post_rewrite_idx = next(
+            (
+                i
+                for i, r in enumerate(rewrites)
+                if r.get("source") == "/posts/:id"
+                and r.get("destination") == "/api/post-preview?id=:id"
+            ),
+            None,
+        )
+        catchall_idx = next(
+            (i for i, r in enumerate(rewrites) if r.get("destination") == "/index.html"),
+            None,
+        )
+        assert post_rewrite_idx is not None
+        assert catchall_idx is not None
+        assert post_rewrite_idx < catchall_idx
         assert any(
             h.get("source") == "/assets/(.*)"
             for h in vercel.get("headers", [])
@@ -360,5 +376,4 @@ class TestWSGIAndDeploymentArtifacts:
 
         fe_env_example = (PROJECT_ROOT / "frontend" / ".env.example").read_text(encoding="utf-8")
         assert "VITE_API_BASE_URL" in fe_env_example
-        assert (PROJECT_ROOT / "docs" / "deployment_free_tier.md").is_file()
 

@@ -418,3 +418,27 @@ class TestExternalMediaUrlValidation:
 
         assert exc_info.value.status_code == 400
         assert exc_info.value.code == expected_code
+
+    def test_transcode_image_bytes_to_jpeg_converts_webp_downscales_and_rejects_corrupt_bytes(self):
+        png_bytes = _encode_png_with_text_chunk(1600, 900)
+        webp_res = media_pipeline.optimize_image(
+            png_bytes,
+            filename="banner.png",
+            content_type="image/png",
+            output_format="webp",
+            max_width=1280,
+            max_height=1280,
+        )
+        jpeg_bytes = media_pipeline.transcode_image_bytes_to_jpeg(
+            webp_res["data"],
+            max_width=800,
+            max_height=800,
+        )
+        assert jpeg_bytes.startswith(b"\xff\xd8\xff")
+        decoded = media_pipeline.decode_image_bytes(jpeg_bytes)
+        assert max(decoded.shape[:2]) <= 800
+
+        with pytest.raises(media_pipeline.MediaValidationError) as corrupt_exc:
+            media_pipeline.transcode_image_bytes_to_jpeg(b"not-valid-image")
+        assert corrupt_exc.value.status_code == 500
+        assert corrupt_exc.value.code == "IMAGE_TRANSCODE_ERROR"

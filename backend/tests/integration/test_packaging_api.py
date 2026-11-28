@@ -259,6 +259,69 @@ class TestReadinessAndFrontendBundleServing:
             assert api_missing.is_json
             assert "default-src 'none'" in api_missing.headers.get("Content-Security-Policy", "")
 
+    def test_flask_serves_post_specific_og_preview_and_falls_back_for_unknown_post(self, tmp_path):
+        dist_dir = tmp_path / "dist"
+        assets_dir = dist_dir / "assets"
+        assets_dir.mkdir(parents=True)
+        (dist_dir / "index.html").write_text(
+            '<!doctype html><html lang="ar" dir="rtl"><head>'
+            '<meta name="description" content="وصف عام للموقع" />'
+            '<meta property="og:type" content="website" />'
+            '<meta property="og:title" content="عنوان عام للموقع" />'
+            '<meta property="og:description" content="وصف عام" />'
+            '<meta property="og:image" content="/logo.jpg" />'
+            '<meta name="twitter:card" content="summary" />'
+            '<title>عنوان عام للموقع</title>'
+            '</head><body><div id="root"></div></body></html>',
+            encoding="utf-8",
+        )
+
+        spa_app = backend_app.create_app({
+            "TESTING": True,
+            "CMS_DATA_FILE": str(tmp_path / "spa_preview.sqlite3"),
+            "STORAGE_BACKEND": "sqlite",
+            "MEDIA_UPLOAD_DIR": str(tmp_path / "spa_preview_uploads"),
+            "SERVE_FRONTEND_DIST": True,
+            "FRONTEND_DIST_DIR": str(dist_dir),
+        })
+
+        store = spa_app.extensions["cms_store"]
+        created = store.create_post({
+            "title": 'إعلان خاص <script>alert(1)</script> "للمدرسة"',
+            "summary": "ملخص مخصص للمشاركة عبر واتساب وفيسبوك.",
+            "category": "updates",
+            "publishedAt": "2026-11-26T09:00:00Z",
+            "eventDate": "",
+            "imageUrl": "/api/media/images/0123456789abcdef.webp",
+        })
+        backend_app.clear_posts_cache()
+
+        with spa_app.test_client() as c:
+            post_resp = c.get(
+                f"/posts/{created['id']}",
+                base_url="https://mahjar.example.org",
+            )
+            assert post_resp.status_code == 200
+            assert post_resp.mimetype == "text/html"
+            html = post_resp.get_data(as_text=True)
+            assert "عنوان عام للموقع" not in html
+            assert "<script>alert(1)</script>" not in html
+            assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
+            assert 'property="og:type" content="article"' in html
+            assert f'property="og:url" content="https://mahjar.example.org/posts/{created["id"]}"' in html
+            assert 'property="og:image" content="https://mahjar.example.org/api/media/images/0123456789abcdef.webp?format=jpeg"' in html
+            assert 'property="og:image:secure_url" content="https://mahjar.example.org/api/media/images/0123456789abcdef.webp?format=jpeg"' in html
+            assert 'property="og:image:type" content="image/jpeg"' in html
+            assert 'property="og:image:alt"' in html
+            assert 'property="og:description" content="ملخص مخصص للمشاركة عبر واتساب وفيسبوك."' in html
+            assert 'name="twitter:card" content="summary_large_image"' in html
+            assert '<div id="root"></div>' in html
+            assert "frame-ancestors 'none'" in post_resp.headers.get("Content-Security-Policy", "")
+
+            unknown_resp = c.get("/posts/999999", base_url="https://mahjar.example.org")
+            assert unknown_resp.status_code == 200
+            assert "عنوان عام للموقع" in unknown_resp.get_data(as_text=True)
+
 
 
 class _FakePostgresCursor:

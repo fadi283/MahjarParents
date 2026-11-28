@@ -3,7 +3,20 @@
   "framework": "vite",
   "buildCommand": "cd frontend && npm ci && npm run build && npm run build:verify",
   "outputDirectory": "frontend/dist",
+  "functions": {
+    "api/post-preview.js": {
+      "includeFiles": "frontend/dist/index.html"
+    }
+  },
   "rewrites": [
+    {
+      "source": "/posts/:id",
+      "destination": "/api/post-preview?id=:id"
+    },
+    {
+      "source": "/posts/:id/",
+      "destination": "/api/post-preview?id=:id"
+    },
     {
       "source": "/(.*)",
       "destination": "/index.html"
