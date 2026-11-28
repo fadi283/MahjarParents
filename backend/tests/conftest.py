@@ -21,6 +21,12 @@ def reset_caches():
         backend_app.clear_forms_cache()
 
 
+@pytest.fixture(scope="session")
+def admin_password_hash() -> str:
+    """Pre-hash the default test admin password once per pytest session."""
+    return generate_password_hash("MahjarAdmin!2026")
+
+
 @pytest.fixture
 def admin_credentials() -> Dict[str, str]:
     """Provide default admin test credentials."""
@@ -31,14 +37,19 @@ def admin_credentials() -> Dict[str, str]:
 
 
 @pytest.fixture
-def flask_app(tmp_path, admin_credentials):
+def flask_app(tmp_path, admin_credentials, admin_password_hash):
     """Create an isolated Flask application instance via the application factory."""
+    pw_hash = (
+        admin_password_hash
+        if admin_credentials["password"] == "MahjarAdmin!2026"
+        else generate_password_hash(admin_credentials["password"])
+    )
     return backend_app.create_app({
         "TESTING": True,
         "MEDIA_UPLOAD_DIR": str(tmp_path / "uploads"),
         "SECRET_KEY": "test-secret-key-for-mahjar-admin-cms",
         "ADMIN_USERNAME": admin_credentials["username"],
-        "ADMIN_PASSWORD_HASH": generate_password_hash(admin_credentials["password"]),
+        "ADMIN_PASSWORD_HASH": pw_hash,
         "ADMIN_TOKEN_TTL_SECONDS": 3600,
         "CMS_DATA_FILE": str(tmp_path / "cms_data.json"),
     })

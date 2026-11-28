@@ -1,4 +1,16 @@
 {
+  "scripts": {
+    "hooks:install": "git config core.hooksPath .githooks",
+    "test:smoke": "bash scripts/run-backend-tests.sh -m smoke -q",
+    "test:unit": "bash scripts/run-backend-tests.sh -m unit -q",
+    "test:integration": "bash scripts/run-backend-tests.sh -m 'integration and not performance and not slow' -q",
+    "test:security": "bash scripts/run-backend-tests.sh -m security -q",
+    "test:performance": "bash scripts/run-backend-tests.sh -m performance -q",
+    "test:backend:fast": "bash scripts/run-backend-tests.sh -m 'smoke or unit' -q",
+    "test:frontend": "npm --prefix frontend test",
+    "test:frontend:fast": "npm --prefix frontend run test:fast",
+    "test:all": "bash scripts/run-backend-tests.sh -q && npm --prefix frontend test"
+  },
   "dependencies": {
     "@neon/config": "^1.14.8",
     "@neon/env": "^2.1.11"

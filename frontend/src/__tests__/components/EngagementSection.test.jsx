@@ -9,13 +9,13 @@ import {
   fetchPublicEngagementForms,
   normalizeAndFilterEngagementForms,
   normalizeEngagementForm,
-} from '../utils/engagementForms.js';
-import GoogleFormEmbed from '../components/GoogleFormEmbed.jsx';
+} from '../../utils/engagementForms.js';
+import GoogleFormEmbed from '../../components/GoogleFormEmbed.jsx';
 import EngagementSection, {
   isCardActivationKey,
   resolveSelectedEngagementForm,
-} from '../components/EngagementSection.jsx';
-import App, { resolvePageFromHash } from '../App.jsx';
+} from '../../components/EngagementSection.jsx';
+import App, { resolvePageFromHash } from '../../App.jsx';
 
 const sampleForms = [
   {

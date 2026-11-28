@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import CommitteeMemberCard from '../components/CommitteeMemberCard.jsx';
-import CommitteeDirectory from '../components/CommitteeDirectory.jsx';
-import App from '../App.jsx';
+import CommitteeMemberCard from '../../components/CommitteeMemberCard.jsx';
+import CommitteeDirectory from '../../components/CommitteeDirectory.jsx';
+import App from '../../App.jsx';
 
 const sampleMemberWithAvatarAndEmail = {
   id: 1,

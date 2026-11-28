@@ -8,7 +8,11 @@
     "build": "vite build",
     "build:verify": "node scripts/verify-dist.js",
     "preview": "vite preview",
-    "test": "node scripts/run-tests.js"
+    "test": "node scripts/run-tests.js",
+    "test:fast": "node scripts/run-tests.js --suite=components,features",
+    "test:components": "node scripts/run-tests.js --suite=components",
+    "test:features": "node scripts/run-tests.js --suite=features",
+    "test:packaging": "node scripts/run-tests.js --suite=packaging"
   },
   "dependencies": {
     "react": "^18.3.1",

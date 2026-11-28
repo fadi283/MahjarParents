@@ -1,0 +1,38 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+cd "$ROOT_DIR"
+
+STAGED="$(git diff --cached --name-only --diff-filter=ACMR || true)"
+if [ -z "$STAGED" ]; then
+  exit 0
+fi
+
+BACKEND_CHANGED=false
+FRONTEND_CHANGED=false
+
+if printf '%s\n' "$STAGED" | grep -qE '^(backend/|pytest\.ini$)'; then
+  BACKEND_CHANGED=true
+fi
+
+if printf '%s\n' "$STAGED" | grep -qE '^frontend/'; then
+  FRONTEND_CHANGED=true
+fi
+
+if [ "$BACKEND_CHANGED" = false ] && [ "$FRONTEND_CHANGED" = false ]; then
+  echo "[pre-commit] Docs/config only — skipping fast unit/smoke tests."
+  exit 0
+fi
+
+if [ "$BACKEND_CHANGED" = true ]; then
+  echo "[pre-commit] Backend changes detected — running smoke + unit tests..."
+  bash scripts/run-backend-tests.sh -m "smoke or unit" -q
+fi
+
+if [ "$FRONTEND_CHANGED" = true ]; then
+  echo "[pre-commit] Frontend changes detected — running fast component/feature tests..."
+  npm --prefix frontend run test:fast
+fi
+
+echo "[pre-commit] All fast checks passed."

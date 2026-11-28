@@ -1,6 +1,8 @@
 import pytest
 
 
+@pytest.mark.smoke
+@pytest.mark.integration
 @pytest.mark.api
 def test_health_check_returns_ok_status(client):
     """GET /api/health should return 200 OK with service status metadata."""

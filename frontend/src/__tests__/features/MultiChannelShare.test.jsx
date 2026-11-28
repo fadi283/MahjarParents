@@ -16,13 +16,13 @@ import {
   isMobileDevice,
   parseFormIdFromLocation,
   shouldUseNativeMobileShare,
-} from '../utils/whatsappShare.js';
-import ShareActions from '../components/ShareActions.jsx';
-import AnnouncementCard from '../components/AnnouncementCard.jsx';
-import PostDetailView from '../components/PostDetailView.jsx';
-import EngagementSection from '../components/EngagementSection.jsx';
-import GoogleFormEmbed from '../components/GoogleFormEmbed.jsx';
-import App from '../App.jsx';
+} from '../../utils/whatsappShare.js';
+import ShareActions from '../../components/ShareActions.jsx';
+import AnnouncementCard from '../../components/AnnouncementCard.jsx';
+import PostDetailView from '../../components/PostDetailView.jsx';
+import EngagementSection from '../../components/EngagementSection.jsx';
+import GoogleFormEmbed from '../../components/GoogleFormEmbed.jsx';
+import App from '../../App.jsx';
 
 const samplePost = {
   id: 102,

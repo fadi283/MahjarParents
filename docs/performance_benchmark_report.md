@@ -51,7 +51,7 @@
 | ذروة استهلاك الذاكرة (`peakRssMb`) | `101.83 MB` | `< 512 MB` | PASS |
 
 ### التحقق من القراءة والكتابة المتزامنة وموجات ETag 304
-- تم التحقق ضمن [`backend/tests/test_performance_concurrency.py`](../backend/tests/test_performance_concurrency.py) من:
+- تم التحقق ضمن [`backend/tests/performance/test_performance_concurrency.py`](../backend/tests/performance/test_performance_concurrency.py) من:
   - حماية البدء البارد (`50` خيطاً متزامناً على حاجز واحد = استدعاء واحد فقط للمصدر).
   - موجة `500` مستخدم بـ `1,000` طلب مع `ETag / 304 Not Modified` بمتوسط `< 500 ms` وصفر أخطاء `5xx`.
   - تزامن `100` قارئ عام مع `8` عمليات كتابة إدارية متزامنة على `SQLite WAL` دون أخطاء `5xx` أو قفل قاعدة البيانات.

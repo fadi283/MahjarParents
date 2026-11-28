@@ -19,10 +19,12 @@ REQUIRED_MEMBER_KEYS = {
 }
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestCommitteeDirectoryPayload:
     """Contract and data-integrity tests for GET /api/committee."""
 
+    @pytest.mark.smoke
     def test_returns_200_and_all_default_committee_members(self, client):
         response = client.get("/api/committee")
 
@@ -110,6 +112,7 @@ class TestCommitteeDirectoryPayload:
         assert response.get_json() == []
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestCommitteeOrdering:
     """Ordering and hierarchy tests for GET /api/committee."""
@@ -156,8 +159,9 @@ class TestCommitteeOrdering:
         assert [item["displayOrder"] for item in data] == [1, 2, 3, 4]
 
 
+@pytest.mark.integration
+@pytest.mark.integration
 @pytest.mark.api
-@pytest.mark.performance
 class TestCommitteeCachingAndPerformance:
     """Caching, ETag conditional requests, and NFR performance tests for GET /api/committee."""
 

@@ -15,13 +15,13 @@ import {
   validateGoogleFormUrl,
   validateMediaLinkInput,
   validatePostInput,
-} from '../utils/adminValidation.js';
+} from '../../utils/adminValidation.js';
 import {
   ADMIN_TOKEN_STORAGE_KEY,
   AdminApiError,
   createAdminApiClient,
   translateAdminError,
-} from '../utils/adminApi.js';
+} from '../../utils/adminApi.js';
 import {
   moveItemInList,
   movePostInList,
@@ -33,14 +33,14 @@ import {
   upsertFormList,
   upsertMediaLinkList,
   upsertPostList,
-} from '../utils/adminState.js';
-import AdminLoginForm from '../components/admin/AdminLoginForm.jsx';
-import CommitteeAdminPanel from '../components/admin/CommitteeAdminPanel.jsx';
-import PostsAdminPanel from '../components/admin/PostsAdminPanel.jsx';
-import MediaLinksAdminPanel from '../components/admin/MediaLinksAdminPanel.jsx';
-import FormsAdminPanel from '../components/admin/FormsAdminPanel.jsx';
-import AdminDashboard, { ADMIN_SECTIONS } from '../components/admin/AdminDashboard.jsx';
-import App from '../App.jsx';
+} from '../../utils/adminState.js';
+import AdminLoginForm from '../../components/admin/AdminLoginForm.jsx';
+import CommitteeAdminPanel from '../../components/admin/CommitteeAdminPanel.jsx';
+import PostsAdminPanel from '../../components/admin/PostsAdminPanel.jsx';
+import MediaLinksAdminPanel from '../../components/admin/MediaLinksAdminPanel.jsx';
+import FormsAdminPanel from '../../components/admin/FormsAdminPanel.jsx';
+import AdminDashboard, { ADMIN_SECTIONS } from '../../components/admin/AdminDashboard.jsx';
+import App from '../../App.jsx';
 
 function createMemoryStorage(initialEntries = {}) {
   const store = new Map(Object.entries(initialEntries));
