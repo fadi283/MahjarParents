@@ -92,7 +92,7 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install backend dependencies
-        run: pip install --no-cache-dir -r backend/requirements.txt
+        run: pip install -r backend/requirements.txt
 
       - name: Fast gate (smoke + unit)
         run: pytest -m "smoke or unit" -q
@@ -164,7 +164,7 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       - name: Install backend dependencies
-        run: pip install --no-cache-dir -r backend/requirements.txt
+        run: pip install -r backend/requirements.txt
 
       - name: Run performance & concurrency suite
         run: pytest -m "performance" -q
