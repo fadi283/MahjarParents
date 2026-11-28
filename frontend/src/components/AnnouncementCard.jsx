@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   ALLOWED_EXTERNAL_MEDIA_TYPES,
   MEDIA_TYPE_LABELS,
@@ -8,6 +8,9 @@ import {
 import LazyMediaImage from './LazyMediaImage.jsx';
 import PostMediaGallery from './PostMediaGallery.jsx';
 import ShareActions from './ShareActions.jsx';
+
+export const SUMMARY_PREVIEW_MAX_LENGTH = 280;
+export const SUMMARY_PREVIEW_MAX_LINES = 4;
 
 export const CATEGORY_LABELS = {
   general: 'إعلان عام',
@@ -33,21 +36,92 @@ export function formatArabicDate(isoDateString) {
   }
 }
 
+/**
+ * Compute full text, collapsed preview text, truncation status, and separate details
+ * for an announcement card without duplicating truncated summaries.
+ */
+export function buildAnnouncementTextState(post) {
+  const rawSummary = String(post?.summary ?? post?.description ?? '')
+    .replace(/\r\n?/g, '\n')
+    .trim();
+  const rawContent = String(post?.content ?? post?.body ?? post?.details ?? '')
+    .replace(/\r\n?/g, '\n')
+    .trim();
+
+  let fullText = '';
+  let separateDetails = '';
+
+  if (!rawContent || rawContent === rawSummary) {
+    fullText = rawSummary;
+  } else if (!rawSummary) {
+    fullText = rawContent;
+  } else {
+    const normalizedContent = rawContent.replace(/\s+/g, ' ').trim();
+    const normalizedSummaryPrefix = rawSummary
+      .replace(/(?:…|\.{3})$/, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    if (
+      normalizedSummaryPrefix.length > 0 &&
+      normalizedContent.startsWith(normalizedSummaryPrefix)
+    ) {
+      fullText = rawContent;
+    } else {
+      fullText = rawSummary;
+      separateDetails = rawContent;
+    }
+  }
+
+  const lines = fullText ? fullText.split('\n') : [];
+  const exceedsLines = lines.length > SUMMARY_PREVIEW_MAX_LINES;
+  const exceedsLength = fullText.length > SUMMARY_PREVIEW_MAX_LENGTH;
+
+  if (!exceedsLines && !exceedsLength) {
+    return {
+      fullText,
+      previewText: fullText,
+      isTruncated: false,
+      separateDetails,
+    };
+  }
+
+  let candidate = exceedsLines
+    ? lines.slice(0, SUMMARY_PREVIEW_MAX_LINES).join('\n')
+    : fullText;
+
+  const maxSlice = SUMMARY_PREVIEW_MAX_LENGTH - 1;
+  if (candidate.length > maxSlice) {
+    const sliced = candidate.slice(0, maxSlice);
+    const lastSpace = Math.max(sliced.lastIndexOf(' '), sliced.lastIndexOf('\n'));
+    candidate =
+      lastSpace >= Math.floor(maxSlice * 0.6) ? sliced.slice(0, lastSpace) : sliced;
+  }
+
+  candidate = candidate.trimEnd();
+  const previewText = /(?:…|\.{3})$/.test(candidate) ? candidate : `${candidate}…`;
+
+  return {
+    fullText,
+    previewText,
+    isTruncated: true,
+    separateDetails,
+  };
+}
+
 export default function AnnouncementCard({
   post,
   shareBaseUrl,
+  initialExpanded = false,
 }) {
+  const [isExpanded, setIsExpanded] = useState(Boolean(initialExpanded));
+
   if (!post) return null;
 
   const title = (post.title ?? '').trim();
-  const summary = (
-    post.summary ??
-    post.content ??
-    post.description ??
-    ''
-  ).trim();
-  const fullBody = (post.content ?? post.body ?? post.details ?? '').trim();
-  const extraBody = fullBody && fullBody !== summary ? fullBody : '';
+  const { fullText, previewText, isTruncated, separateDetails } =
+    buildAnnouncementTextState(post);
+  const displayedText = isExpanded || !isTruncated ? fullText : previewText;
   const category = (post.category ?? 'general').trim();
   const categoryLabel = CATEGORY_LABELS[category] ?? CATEGORY_LABELS.general;
   const publishedAt =
@@ -98,7 +172,19 @@ export default function AnnouncementCard({
 
         <h3 className="announcement-card__title">{title}</h3>
 
-        <p className="announcement-card__summary">{summary}</p>
+        <div className="announcement-card__summary-block">
+          <p className="announcement-card__summary">{displayedText}</p>
+          {isTruncated && (
+            <button
+              type="button"
+              className="announcement-card__toggle-btn"
+              aria-expanded={isExpanded}
+              onClick={() => setIsExpanded((prev) => !prev)}
+            >
+              {isExpanded ? 'عرض أقل' : 'عرض المزيد...'}
+            </button>
+          )}
+        </div>
 
         {formattedEventDate && (
           <div className="announcement-card__event-date">
@@ -117,9 +203,9 @@ export default function AnnouncementCard({
           </div>
         )}
 
-        {(extraBody || embeds.length > 0 || (post.images ?? post.gallery)?.length > 0) && (
+        {(separateDetails || embeds.length > 0 || (post.images ?? post.gallery)?.length > 0) && (
           <div className="announcement-card__details">
-            {extraBody && <p className="post-detail__content">{extraBody}</p>}
+            {separateDetails && <p className="post-detail__content">{separateDetails}</p>}
             <PostMediaGallery
               post={post}
               excludeImageUrls={safeImageUrl ? [safeImageUrl] : []}
