@@ -4,7 +4,9 @@ import pytest
 import app as backend_app
 
 
+@pytest.mark.integration
 @pytest.mark.api
+@pytest.mark.security
 class TestAdminAuthLifecycle:
     """Authentication, session/token handling, revocation, and cache security tests."""
 
@@ -173,6 +175,7 @@ class TestAdminAuthLifecycle:
         assert "no-store" in resp.headers.get("Cache-Control", "")
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestAdminCommitteeCRUD:
     """Authenticated CRUD, XSS sanitization, and cache invalidation for committee members."""
@@ -312,6 +315,7 @@ class TestAdminCommitteeCRUD:
         )
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestAdminPostsCRUD:
     """Authenticated CRUD, sanitization, media link validation, and cache sync for posts."""
@@ -425,6 +429,7 @@ class TestAdminPostsCRUD:
         assert client.delete("/api/admin/posts/9999", headers=admin_auth_headers).status_code == 404
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestAdminMediaLinksCRUD:
     """Authenticated CRUD for standalone and post-scoped media links."""
@@ -634,6 +639,7 @@ class TestAdminMediaLinksCRUD:
         assert {"instagram", "x", "external_image"}.issubset(providers)
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestAdminGoogleFormsCRUD:
     """Authenticated CRUD, trusted domain validation, and XSS sanitization for Google Forms."""
@@ -778,6 +784,7 @@ class TestAdminGoogleFormsCRUD:
         assert client.delete("/api/admin/forms/9999", headers=admin_auth_headers).status_code == 404
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestCMSPersistenceAcrossRestarts:
     """Verify atomic JSON store persists CMS mutations across app restarts."""
@@ -855,6 +862,7 @@ class TestCMSPersistenceAcrossRestarts:
             assert any(f["id"] == form_id and f["title"] == "نموذج مستمر" for f in forms)
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestAdminPostsReordering:
     """Verify persistent admin post reordering across JSON and SQLite backends."""
@@ -936,6 +944,7 @@ class TestAdminPostsReordering:
             assert persisted_ids == [new_post_id, *reversed_ids]
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestAdminCommitteeReordering:
     """Verify persistent admin committee reordering across JSON and SQLite backends."""
@@ -1034,6 +1043,7 @@ class TestAdminCommitteeReordering:
             assert persisted_ids == [*reversed_ids, new_member_id]
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestAdminFormsReordering:
     """Verify persistent admin Google Forms reordering across JSON and SQLite backends."""

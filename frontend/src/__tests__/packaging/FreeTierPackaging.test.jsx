@@ -11,12 +11,12 @@ import {
   normalizeApiBaseUrl,
   resolveApiBaseUrl,
   resolveMediaUrl,
-} from '../utils/apiConfig.js';
-import { createAdminApiClient } from '../utils/adminApi.js';
-import { fetchPublicEngagementForms } from '../utils/engagementForms.js';
-import LazyMediaImage from '../components/LazyMediaImage.jsx';
-import CommitteeMemberCard from '../components/CommitteeMemberCard.jsx';
-import { verifyDistDirectory } from '../../scripts/verify-dist.js';
+} from '../../utils/apiConfig.js';
+import { createAdminApiClient } from '../../utils/adminApi.js';
+import { fetchPublicEngagementForms } from '../../utils/engagementForms.js';
+import LazyMediaImage from '../../components/LazyMediaImage.jsx';
+import CommitteeMemberCard from '../../components/CommitteeMemberCard.jsx';
+import { verifyDistDirectory } from '../../../scripts/verify-dist.js';
 
 test('apiConfig normalizes HTTPS and localhost origins and rejects unsafe or remote HTTP origins', () => {
   assert.equal(

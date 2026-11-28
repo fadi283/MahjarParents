@@ -4,12 +4,12 @@ import fs from 'node:fs';
 import path from 'node:path';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
-import AnnouncementCard from '../components/AnnouncementCard.jsx';
+import AnnouncementCard from '../../components/AnnouncementCard.jsx';
 import AnnouncementsFeed, {
   POST_CATEGORIES,
   sortAndFilterPosts,
-} from '../components/AnnouncementsFeed.jsx';
-import App from '../App.jsx';
+} from '../../components/AnnouncementsFeed.jsx';
+import App from '../../App.jsx';
 
 const samplePostsUnordered = [
   {

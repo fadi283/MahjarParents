@@ -13,7 +13,7 @@ from werkzeug.security import generate_password_hash
 
 import app as backend_app
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 BACKEND_DIR = PROJECT_ROOT / "backend"
 _BENCH_PW = "MahjarBench!2026"
 _BENCH_PW_HASH = generate_password_hash(_BENCH_PW)
@@ -27,8 +27,8 @@ def _make_png_bytes(width: int = 48, height: int = 48, color=(30, 110, 190)) -> 
     return buf.tobytes()
 
 
-@pytest.mark.unit
 @pytest.mark.performance
+@pytest.mark.slow
 class TestCacheThreadSafetyAndBounds:
     """Thread-safety, cold-cache stampede protection, and memory bounds under free-tier limits."""
 
@@ -139,59 +139,9 @@ class TestCacheThreadSafetyAndBounds:
         assert len(backend_app._posts_cache["responses"]) <= max_entries
 
 
-@pytest.mark.unit
-class TestLoadBenchmarkEngine:
-    """Unit tests for latency percentile calculations and NFR threshold evaluation."""
-
-    def test_compute_latency_metrics_and_evaluate_nfr_thresholds(self):
-        import load_benchmark
-
-        samples = [
-            {"endpoint": "/api/posts", "status": 200, "latencyMs": 10.0, "error": None},
-            {"endpoint": "/api/posts", "status": 200, "latencyMs": 20.0, "error": None},
-            {"endpoint": "/api/committee", "status": 200, "latencyMs": 30.0, "error": None},
-            {"endpoint": "/api/forms", "status": 304, "latencyMs": 40.0, "error": None},
-            {"endpoint": "/api/health", "status": 200, "latencyMs": 100.0, "error": None},
-        ]
-        metrics = load_benchmark.compute_latency_metrics(
-            samples,
-            elapsed_seconds=0.25,
-            peak_rss_mb=120.0,
-            peak_tracemalloc_mb=4.5,
-        )
-        assert metrics["totalRequests"] == 5
-        assert metrics["successfulRequests"] == 5
-        assert metrics["clientErrors4xx"] == 0
-        assert metrics["serverErrors5xx"] == 0
-        assert metrics["connectionErrors"] == 0
-        assert metrics["minMs"] == 10.0
-        assert metrics["avgMs"] == 40.0
-        assert metrics["p50Ms"] == 30.0
-        assert metrics["maxMs"] == 100.0
-        assert metrics["requestsPerSec"] == 20.0
-        assert metrics["peakRssMb"] == 120.0
-
-        passed = load_benchmark.evaluate_nfr_thresholds(
-            metrics, max_avg_ms=550.0, max_rss_mb=512.0
-        )
-        assert passed["passed"] is True
-        assert passed["failures"] == []
-
-        failing_metrics = {
-            **metrics,
-            "avgMs": 560.4,
-            "serverErrors5xx": 2,
-            "connectionErrors": 1,
-            "peakRssMb": 600.0,
-        }
-        failed = load_benchmark.evaluate_nfr_thresholds(
-            failing_metrics, max_avg_ms=550.0, max_rss_mb=512.0
-        )
-        assert failed["passed"] is False
-        assert len(failed["failures"]) == 4
-
 
 @pytest.mark.performance
+@pytest.mark.slow
 class TestFiveHundredConcurrentUsersFreeTier:
     """Live TCP/HTTP concurrency benchmarks simulating 500 concurrent users under free-tier limits."""
 

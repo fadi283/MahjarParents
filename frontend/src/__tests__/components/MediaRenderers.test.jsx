@@ -9,12 +9,12 @@ import {
   extractPostMedia,
   resolveExternalMediaEmbed,
   sanitizeImageUrl,
-} from '../utils/mediaEmbeds.js';
-import LazyMediaImage from '../components/LazyMediaImage.jsx';
-import ExternalMediaEmbed from '../components/ExternalMediaEmbed.jsx';
-import PostMediaGallery from '../components/PostMediaGallery.jsx';
-import PostDetailView from '../components/PostDetailView.jsx';
-import AnnouncementsFeed from '../components/AnnouncementsFeed.jsx';
+} from '../../utils/mediaEmbeds.js';
+import LazyMediaImage from '../../components/LazyMediaImage.jsx';
+import ExternalMediaEmbed from '../../components/ExternalMediaEmbed.jsx';
+import PostMediaGallery from '../../components/PostMediaGallery.jsx';
+import PostDetailView from '../../components/PostDetailView.jsx';
+import AnnouncementsFeed from '../../components/AnnouncementsFeed.jsx';
 
 function collectFilesRecursively(dir) {
   const results = [];

@@ -24,10 +24,12 @@ REQUIRED_FORM_KEYS = {
 }
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestPublicFormsConfigPayload:
     """Contract and normalization tests for public GET /api/forms."""
 
+    @pytest.mark.smoke
     def test_returns_200_and_all_default_active_forms_without_auth(self, client):
         response = client.get("/api/forms")
 
@@ -160,6 +162,7 @@ class TestPublicFormsConfigPayload:
         assert form["directUrl"] == "https://forms.gle/fajYrbhcTA3xZa8d9"
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestPublicFormsFilteringAndOrdering:
     """Active-status filtering, type filtering, deterministic ordering, and error handling."""
@@ -253,6 +256,7 @@ class TestPublicFormsFilteringAndOrdering:
         assert ids == [21, 20, 5, 11, 10]
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestPublicFormsDomainValidationDefenseInDepth:
     """Defense-in-depth domain validation and sanitization for stored form configs."""
@@ -319,6 +323,7 @@ class TestPublicFormsDomainValidationDefenseInDepth:
         assert "<script" not in form["embedUrl"].lower()
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestGoogleFormsValidateEndpoint:
     """Contract and security validation tests for POST /api/forms/validate."""
@@ -412,8 +417,9 @@ class TestGoogleFormsValidateEndpoint:
         assert response.get_json()["code"] == expected_code
 
 
+@pytest.mark.integration
+@pytest.mark.integration
 @pytest.mark.api
-@pytest.mark.performance
 class TestPublicFormsAdminSyncAndCaching:
     """Cache invalidation on Admin mutations, HTTP caching/304, and <500ms latency tests."""
 

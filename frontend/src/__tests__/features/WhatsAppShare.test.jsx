@@ -13,12 +13,12 @@ import {
   canUseWebShare,
   parsePostIdFromLocation,
   sharePost,
-} from '../utils/whatsappShare.js';
-import WhatsAppShareButton from '../components/WhatsAppShareButton.jsx';
-import AnnouncementCard from '../components/AnnouncementCard.jsx';
-import AnnouncementsFeed from '../components/AnnouncementsFeed.jsx';
-import PostDetailView from '../components/PostDetailView.jsx';
-import App from '../App.jsx';
+} from '../../utils/whatsappShare.js';
+import WhatsAppShareButton from '../../components/WhatsAppShareButton.jsx';
+import AnnouncementCard from '../../components/AnnouncementCard.jsx';
+import AnnouncementsFeed from '../../components/AnnouncementsFeed.jsx';
+import PostDetailView from '../../components/PostDetailView.jsx';
+import App from '../../App.jsx';
 
 const samplePosts = [
   {

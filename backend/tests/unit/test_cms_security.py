@@ -6,6 +6,7 @@ import cms_security
 
 
 @pytest.mark.unit
+@pytest.mark.security
 class TestPlainTextSanitization:
     """Unit tests for strict XSS and plain-text sanitization helpers."""
 
@@ -68,6 +69,7 @@ class TestPlainTextSanitization:
 
 
 @pytest.mark.unit
+@pytest.mark.security
 class TestImageAndFieldValidation:
     """Unit tests for image URLs, email, phone, dates, integers, and booleans."""
 
@@ -141,6 +143,7 @@ class TestImageAndFieldValidation:
 
 
 @pytest.mark.unit
+@pytest.mark.security
 class TestGoogleFormsUrlValidation:
     """Unit tests for trusted Google Forms embed URL validation and normalization."""
 
@@ -238,6 +241,7 @@ class TestGoogleFormsUrlValidation:
 
 
 @pytest.mark.unit
+@pytest.mark.security
 class TestAdminAuthHelpers:
     """Unit tests for credential verification and signed token lifecycle."""
 

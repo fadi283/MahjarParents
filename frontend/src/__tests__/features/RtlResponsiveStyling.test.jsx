@@ -15,14 +15,14 @@ import {
   TOUCH_TARGET_STYLE,
   enforceDocumentRtl,
   resolveViewportTier,
-} from '../utils/rtlLayout.js';
-import App from '../App.jsx';
-import AnnouncementCard from '../components/AnnouncementCard.jsx';
-import PostDetailView from '../components/PostDetailView.jsx';
-import EngagementSection from '../components/EngagementSection.jsx';
-import CommitteeAdminPanel from '../components/admin/CommitteeAdminPanel.jsx';
-import LazyMediaImage from '../components/LazyMediaImage.jsx';
-import ShareActions from '../components/ShareActions.jsx';
+} from '../../utils/rtlLayout.js';
+import App from '../../App.jsx';
+import AnnouncementCard from '../../components/AnnouncementCard.jsx';
+import PostDetailView from '../../components/PostDetailView.jsx';
+import EngagementSection from '../../components/EngagementSection.jsx';
+import CommitteeAdminPanel from '../../components/admin/CommitteeAdminPanel.jsx';
+import LazyMediaImage from '../../components/LazyMediaImage.jsx';
+import ShareActions from '../../components/ShareActions.jsx';
 
 const samplePost = {
   id: 102,

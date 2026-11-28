@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(git rev-parse --show-toplevel)"
+cd "$ROOT_DIR"
+
+CHANGED=""
+if UPSTREAM="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null)"; then
+  CHANGED="$(git diff --name-only "${UPSTREAM}...HEAD" || true)"
+elif git rev-parse --verify origin/main >/dev/null 2>&1; then
+  CHANGED="$(git diff --name-only origin/main...HEAD || true)"
+elif git rev-parse --verify main >/dev/null 2>&1; then
+  CHANGED="$(git diff --name-only main...HEAD || true)"
+elif git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+  CHANGED="$(git diff --name-only HEAD~1..HEAD || true)"
+fi
+
+BACKEND_CHANGED=false
+FRONTEND_CHANGED=false
+
+if [ -z "$CHANGED" ]; then
+  # Fallback if no comparison base was found (e.g., initial branch push with no diff base)
+  if ! git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+    BACKEND_CHANGED=true
+    FRONTEND_CHANGED=true
+  fi
+else
+  if printf '%s\n' "$CHANGED" | grep -qE '^(backend/|pytest\.ini$|Dockerfile$|Procfile$|render\.yaml$)'; then
+    BACKEND_CHANGED=true
+  fi
+  if printf '%s\n' "$CHANGED" | grep -qE '^(frontend/|vercel\.json$|netlify\.toml$)'; then
+    FRONTEND_CHANGED=true
+  fi
+fi
+
+if [ "$BACKEND_CHANGED" = false ] && [ "$FRONTEND_CHANGED" = false ]; then
+  echo "[pre-push] No backend/frontend code changes detected — skipping pre-push suite."
+  exit 0
+fi
+
+if [ "$BACKEND_CHANGED" = true ]; then
+  echo "[pre-push] Backend changes detected — running unit + integration + security tests (excluding performance/slow)..."
+  bash scripts/run-backend-tests.sh -m "not performance and not slow" -q
+fi
+
+if [ "$FRONTEND_CHANGED" = true ]; then
+  echo "[pre-push] Frontend changes detected — running full frontend tests + Vite build + dist verify..."
+  npm --prefix frontend test && npm --prefix frontend run build && npm --prefix frontend run build:verify
+fi
+
+echo "[pre-push] All pre-push checks passed."

@@ -26,10 +26,12 @@ HEAVY_DETAIL_KEYS = {
 }
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestPostsFeedPayloadAndLightweightContract:
     """Contract, normalization, and lightweight payload tests for GET /api/posts."""
 
+    @pytest.mark.smoke
     def test_returns_200_and_all_default_posts_ordered_newest_first(self, client):
         response = client.get("/api/posts")
 
@@ -112,6 +114,7 @@ class TestPostsFeedPayloadAndLightweightContract:
         assert response.get_json() == []
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestPostsOrderingAndCategoryFiltering:
     """Ordering (newest first) and category query parameter filtering tests for GET /api/posts."""
@@ -164,6 +167,7 @@ class TestPostsOrderingAndCategoryFiltering:
         assert "allowedCategories" in body
 
 
+@pytest.mark.integration
 @pytest.mark.api
 class TestPostsPagination:
     """Pagination support (limit, offset, page/per_page, envelope vs list) tests for GET /api/posts."""
@@ -236,8 +240,9 @@ class TestPostsPagination:
         assert "error" in response.get_json()
 
 
+@pytest.mark.integration
+@pytest.mark.integration
 @pytest.mark.api
-@pytest.mark.performance
 class TestPostsCachingAndPerformance:
     """In-memory caching, ETag 304 support, and <500ms TTFB performance tests for GET /api/posts."""
 
