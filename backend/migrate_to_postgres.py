@@ -11,7 +11,7 @@ _BACKEND_DIR = Path(__file__).resolve().parent
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
-from cms_store import migrate_local_to_postgres  # noqa: E402
+from cms_store import load_dotenv_defaults, migrate_local_to_postgres  # noqa: E402
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -34,14 +34,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--database-url",
         default="",
-        help="PostgreSQL connection string (defaults to MAHJAR_DATABASE_URL or DATABASE_URL).",
+        help="PostgreSQL connection string (defaults to MAHJAR_DATABASE_URL, DATABASE_URL_UNPOOLED, or DATABASE_URL).",
     )
     args = parser.parse_args(argv)
 
+    dotenv = load_dotenv_defaults(_BACKEND_DIR, _BACKEND_DIR.parent)
     database_url = (
         args.database_url
         or os.environ.get("MAHJAR_DATABASE_URL", "")
+        or os.environ.get("DATABASE_URL_UNPOOLED", "")
         or os.environ.get("DATABASE_URL", "")
+        or dotenv.get("MAHJAR_DATABASE_URL", "")
+        or dotenv.get("DATABASE_URL_UNPOOLED", "")
+        or dotenv.get("DATABASE_URL", "")
     ).strip()
     if not database_url:
         print(

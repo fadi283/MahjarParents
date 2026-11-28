@@ -1396,6 +1396,39 @@ class SQLiteCMSStore:
             }
 
 
+def load_dotenv_defaults(
+    backend_dir: str | Path,
+    project_root: str | Path | None = None,
+) -> dict[str, str]:
+    """Read key-value defaults from .env.local/.env files without mutating os.environ."""
+    values: dict[str, str] = {}
+    b_dir = Path(backend_dir)
+    p_root = Path(project_root) if project_root is not None else b_dir.parent
+    for env_path in (
+        p_root / ".env.local",
+        p_root / ".env",
+        b_dir / ".env.local",
+        b_dir / ".env",
+    ):
+        if not env_path.is_file():
+            continue
+        with env_path.open("r", encoding="utf-8") as fh:
+            for raw_line in fh:
+                line = raw_line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                if line.startswith("export "):
+                    line = line[len("export "):].strip()
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip()
+                if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
+                    value = value[1:-1]
+                if key and key not in values:
+                    values[key] = value
+    return values
+
+
 def _is_postgres_database_url(database_url: str) -> bool:
     scheme = urlsplit(database_url.strip()).scheme.lower()
     return scheme in ("postgres", "postgresql")
@@ -1471,6 +1504,7 @@ class PostgresCMSStore:
         return psycopg.connect(
             self._database_url,
             row_factory=dict_row,
+            prepare_threshold=None,
             connect_timeout=10,
             keepalives=1,
             keepalives_idle=30,

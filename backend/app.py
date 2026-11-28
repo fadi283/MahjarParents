@@ -6,6 +6,7 @@ import json
 import math
 import os
 import secrets
+import sys
 import threading
 import time
 from urllib.parse import urlsplit
@@ -40,7 +41,13 @@ from cms_security import (
     validate_positive_int_field,
     verify_admin_credentials,
 )
-from cms_store import ALLOWED_FORM_TYPES, CMSStore, DEFAULT_GOOGLE_FORMS, create_cms_store
+from cms_store import (
+    ALLOWED_FORM_TYPES,
+    CMSStore,
+    DEFAULT_GOOGLE_FORMS,
+    create_cms_store,
+    load_dotenv_defaults,
+)
 from media_pipeline import (
     DEFAULT_MAX_MEDIA_STORAGE_BYTES,
     DEFAULT_OUTPUT_FORMAT,
@@ -1266,37 +1273,19 @@ def _validate_reorder_ids(
 
 
 def _load_dotenv_defaults() -> dict[str, str]:
-    """Read key-value defaults from project or backend .env files without mutating os.environ."""
-    values: dict[str, str] = {}
+    """Read key-value defaults from project or backend .env.local/.env files without mutating os.environ."""
     backend_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(backend_dir)
-    for env_path in (
-        os.path.join(project_root, ".env"),
-        os.path.join(backend_dir, ".env"),
-    ):
-        if not os.path.isfile(env_path):
-            continue
-        with open(env_path, "r", encoding="utf-8") as fh:
-            for raw_line in fh:
-                line = raw_line.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                if line.startswith("export "):
-                    line = line[len("export "):].strip()
-                key, value = line.split("=", 1)
-                key = key.strip()
-                value = value.strip()
-                if len(value) >= 2 and value[0] == value[-1] and value[0] in ("'", '"'):
-                    value = value[1:-1]
-                if key and key not in values:
-                    values[key] = value
-    return values
+    return load_dotenv_defaults(backend_dir, project_root)
 
 
 def create_app(test_config=None):
     """Application factory for creating and configuring the Flask app."""
     is_testing = bool(test_config and test_config.get("TESTING"))
-    dotenv_values = {} if is_testing else _load_dotenv_defaults()
+    running_under_pytest = "pytest" in sys.modules or bool(
+        os.environ.get("PYTEST_CURRENT_TEST")
+    )
+    dotenv_values = {} if (is_testing or running_under_pytest) else _load_dotenv_defaults()
 
     def _get_setting(key: str, default: str = "") -> str:
         if key in os.environ:
@@ -1345,11 +1334,16 @@ def create_app(test_config=None):
         or "auto"
     ).strip().lower()
 
-    database_url = (
+    explicit_db_url = (
         (test_config.get("DATABASE_URL") if test_config and "DATABASE_URL" in test_config else None)
         or _get_setting("MAHJAR_DATABASE_URL")
-        or ("" if is_testing else _get_setting("DATABASE_URL"))
     ).strip()
+    if explicit_db_url:
+        database_url = explicit_db_url
+    elif not is_testing and storage_backend in ("auto", "postgres", "postgresql"):
+        database_url = _get_setting("DATABASE_URL").strip()
+    else:
+        database_url = ""
 
     default_upload_dir = (
         _get_setting("MAHJAR_MEDIA_UPLOAD_DIR")
