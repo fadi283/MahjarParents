@@ -240,3 +240,117 @@ test('sortAndFilterPosts honors explicit displayOrder ascending while preserving
     [101, 102, 103]
   );
 });
+
+test('AnnouncementCard omits show-more toggle for short posts and renders "عرض المزيد..." / "عرض أقل" for long or multi-line posts without duplicating text', () => {
+  const shortHtml = renderToStaticMarkup(
+    <AnnouncementCard post={samplePostsUnordered[0]} />
+  );
+  assert.ok(!shortHtml.includes('عرض المزيد...'), 'Short post must not render show-more button');
+  assert.ok(!shortHtml.includes('عرض أقل'), 'Short post must not render show-less button');
+
+  const fullLongText =
+    'استمراراً لجهود اللجنة في توفير بيئة مدرسية آمنة ومريحة لأبنائنا، تم بحمد الله إنجاز المرحلة الأولى من مشروع العريشة. وتتقدم اللجنة بجزيل الشكر للأخ محمد شاكر إغبارية على مبادرته الكريمة. كما ندعوكم للمساهمة في دعم واستكمال هذا العمل المبارك، وذلك عبر التواصل مع أعضاء اللجنة أو المساهمة المباشرة في تكاليف التظليل الإضافية وتجهيز المقاعد للطلاب.';
+  const truncatedFromApi = fullLongText.slice(0, 220).trimEnd() + '…';
+
+  const apiPostWithContent = {
+    id: 501,
+    title: 'مستجدات مشروع تظليل ساحة المدرسة',
+    summary: truncatedFromApi,
+    content: fullLongText,
+    category: 'updates',
+    publishedAt: '2026-11-22T16:45:00Z',
+    imageUrl: 'https://example.com/shade.webp',
+  };
+
+  const collapsedApiHtml = renderToStaticMarkup(
+    <AnnouncementCard post={apiPostWithContent} />
+  );
+  assert.ok(
+    collapsedApiHtml.includes('عرض المزيد...'),
+    'Long post must render "عرض المزيد..." toggle button'
+  );
+  assert.match(
+    collapsedApiHtml,
+    /aria-expanded="false"/,
+    'Collapsed toggle button must expose aria-expanded="false"'
+  );
+  assert.ok(
+    !collapsedApiHtml.includes('تجهيز المقاعد للطلاب.'),
+    'Collapsed card must hide overflow text until expanded'
+  );
+  assert.doesNotMatch(
+    collapsedApiHtml,
+    /announcement-card__details/,
+    'Full content matching truncated summary must not be duplicated below the image'
+  );
+
+  const expandedApiHtml = renderToStaticMarkup(
+    <AnnouncementCard post={apiPostWithContent} initialExpanded />
+  );
+  assert.ok(
+    expandedApiHtml.includes('تجهيز المقاعد للطلاب.'),
+    'Expanded card must display the full announcement text'
+  );
+  assert.ok(
+    expandedApiHtml.includes('عرض أقل'),
+    'Expanded card must switch toggle label to "عرض أقل"'
+  );
+  assert.match(
+    expandedApiHtml,
+    /aria-expanded="true"/,
+    'Expanded toggle button must expose aria-expanded="true"'
+  );
+  assert.doesNotMatch(
+    expandedApiHtml,
+    /announcement-card__details/,
+    'Expanded card must not duplicate full content below the image'
+  );
+
+  const longSummaryOnlyPost = {
+    id: 502,
+    title: 'إعلان طويل بدون حقل content',
+    summary: fullLongText,
+    category: 'general',
+    publishedAt: '2026-11-21T10:00:00Z',
+  };
+  const longSummaryCollapsedHtml = renderToStaticMarkup(
+    <AnnouncementCard post={longSummaryOnlyPost} />
+  );
+  assert.ok(longSummaryCollapsedHtml.includes('عرض المزيد...'));
+  assert.ok(!longSummaryCollapsedHtml.includes('تجهيز المقاعد للطلاب.'));
+
+  const multilinePost = {
+    id: 503,
+    title: 'إعلان متعدد الأسطر',
+    summary: 'السطر الأول\nالسطر الثاني\nالسطر الثالث\nالسطر الرابع\nالسطر الخامس المخفي',
+    category: 'general',
+    publishedAt: '2026-11-20T10:00:00Z',
+  };
+  const multilineCollapsedHtml = renderToStaticMarkup(
+    <AnnouncementCard post={multilinePost} />
+  );
+  assert.ok(multilineCollapsedHtml.includes('عرض المزيد...'));
+  assert.ok(!multilineCollapsedHtml.includes('السطر الخامس المخفي'));
+
+  const multilineExpandedHtml = renderToStaticMarkup(
+    <AnnouncementCard post={multilinePost} initialExpanded />
+  );
+  assert.ok(multilineExpandedHtml.includes('السطر الخامس المخفي'));
+  assert.ok(multilineExpandedHtml.includes('عرض أقل'));
+});
+
+test('styles.css defines accessible >= 44x44px toggle button and pre-line wrapping for announcement text', () => {
+  const cssPath = path.resolve(process.cwd(), 'src/styles.css');
+  const cssContent = fs.readFileSync(cssPath, 'utf-8');
+
+  assert.match(
+    cssContent,
+    /\.announcement-card__summary\s*\{[^}]*white-space:\s*pre-line/s,
+    '.announcement-card__summary must preserve line breaks with white-space: pre-line'
+  );
+  assert.match(
+    cssContent,
+    /\.announcement-card__toggle-btn\s*\{[^}]*min-height:\s*44px[^}]*min-width:\s*44px/s,
+    '.announcement-card__toggle-btn must define >= 44x44px accessible touch target'
+  );
+});

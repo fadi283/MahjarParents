@@ -5,8 +5,8 @@ export default defineConfig({
   auth: false,
   // Branch policy: per-branch tuning
   branch: (branch) => {
-    if (branch.isDefault) {
-      // Default branch: no overrides, uses project defaults
+    if (branch.isDefault || branch.name === "dev") {
+      // Default branch and persistent dev branch: no overrides / no auto-expiration
       return {};
     }
     if (!branch.exists) {

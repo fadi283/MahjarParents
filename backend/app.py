@@ -498,7 +498,12 @@ def _truncate_summary(text: str, max_length: int = POST_SUMMARY_MAX_LENGTH) -> s
     cleaned = " ".join((text or "").split())
     if len(cleaned) <= max_length:
         return cleaned
-    return cleaned[: max_length - 1].rstrip() + "…"
+    cutoff = max_length - 1
+    truncated = cleaned[:cutoff]
+    last_space = truncated.rfind(" ")
+    if last_space >= int(cutoff * 0.6):
+        truncated = truncated[:last_space]
+    return truncated.rstrip() + "…"
 
 
 def _normalize_and_order_posts(records):
@@ -507,6 +512,15 @@ def _normalize_and_order_posts(records):
     for idx, raw in enumerate(records):
         post_id = raw.get("id", idx + 1)
         title = (raw.get("title") or "").strip()
+        raw_content = (
+            raw.get("content")
+            or raw.get("summary")
+            or raw.get("description")
+            or ""
+        )
+        full_content = (
+            str(raw_content).replace("\r\n", "\n").replace("\r", "\n").strip()
+        )
         raw_summary = (
             raw.get("summary")
             or raw.get("description")
@@ -561,6 +575,7 @@ def _normalize_and_order_posts(records):
                     "id": post_id,
                     "title": title,
                     "summary": summary,
+                    "content": full_content,
                     "category": category,
                     "publishedAt": published_at,
                     "published_at": published_at,

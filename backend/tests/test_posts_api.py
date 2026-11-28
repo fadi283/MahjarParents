@@ -57,7 +57,10 @@ class TestPostsFeedPayloadAndLightweightContract:
     def test_normalizes_camel_and_snake_case_and_strips_heavy_fields_for_lightweight_payload(
         self, client, mock_posts_source
     ):
-        long_text = "تفاصيل مطولة جداً عن الفعالية المدرسية " * 30
+        long_text = (
+            "تفاصيل مطولة جداً عن الفعالية المدرسية\n"
+            + ("فقرة إضافية توضح البرنامج الزمني الكامل للفعالية " * 15)
+        )
         mock_posts_source([
             {
                 "id": 42,
@@ -87,9 +90,18 @@ class TestPostsFeedPayloadAndLightweightContract:
         assert post["imageUrl"] == "https://example.com/reading.webp"
         assert post["image_url"] == "https://example.com/reading.webp"
 
-        # Summary should be bounded/lightweight and heavy detail fields stripped
+        # Summary should be bounded/lightweight at a word boundary, while full content preserves newlines
         assert len(post["summary"]) <= backend_app.POST_SUMMARY_MAX_LENGTH
         assert post["summary"].endswith("…") or post["summary"].endswith("...")
+        summary_body = post["summary"].rstrip("….")
+        collapsed_long_text = " ".join(long_text.split())
+        assert collapsed_long_text.startswith(summary_body)
+        assert (
+            len(collapsed_long_text) == len(summary_body)
+            or collapsed_long_text[len(summary_body)] == " "
+        )
+        assert post["content"] == long_text.strip()
+        assert "\n" in post["content"]
         assert HEAVY_DETAIL_KEYS.isdisjoint(post.keys())
 
     def test_handles_empty_posts_list_gracefully(self, client, mock_posts_source):
